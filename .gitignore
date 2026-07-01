@@ -1,0 +1,257 @@
+# =========================================================
+# CloudMind .gitignore
+# Frontend + Backend + Docker + Local AI config
+# =========================================================
+
+
+# =========================================================
+# 1. Environment variables / Sensitive config
+# =========================================================
+
+# Real local environment files - DO NOT COMMIT
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.sample
+
+# Local config files
+config.local.*
+settings.local.*
+application-local.*
+application-dev.*
+application-test.*
+
+# Secret / credential files
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Common credential files
+credentials.json
+client_secret*.json
+service-account*.json
+firebase-adminsdk*.json
+google-services.json
+GoogleService-Info.plist
+
+# SSH keys
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.ppk
+
+
+# =========================================================
+# 2. Claude / AI assistant local files
+# =========================================================
+
+# Claude local workspace config
+.claude/
+.agents/
+
+# If you later want to share Claude commands/team configs,
+# remove the two lines above and ignore only local/private files instead.
+
+
+# =========================================================
+# 3. IDE / Editor
+# =========================================================
+
+# IntelliJ IDEA / WebStorm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# Eclipse / STS
+.project
+.classpath
+.settings/
+
+# Vim / temporary editor files
+*.swp
+*.swo
+*~
+
+
+# =========================================================
+# 4. OS generated files
+# =========================================================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+
+# =========================================================
+# 5. Logs
+# =========================================================
+
+logs/
+*.log
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+
+# =========================================================
+# 6. Frontend / Node / Vue / Vite
+# =========================================================
+
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+frontend/coverage/
+
+node_modules/
+dist/
+build/
+.vite/
+.cache/
+coverage/
+
+# Package manager cache
+.npm/
+.yarn/
+.pnpm-store/
+
+# Optional lock-error files
+*.tgz
+
+
+# =========================================================
+# 7. Backend / Java / Spring Boot
+# =========================================================
+
+backend/target/
+backend/build/
+backend/out/
+
+target/
+build/
+out/
+
+*.class
+*.jar
+*.war
+*.ear
+
+# Maven
+.mvn/timing.properties
+
+# Gradle
+.gradle/
+gradle-app.setting
+
+
+# =========================================================
+# 8. Docker
+# =========================================================
+
+# Keep docker-compose.yml
+# Ignore local override files
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Docker local config
+.docker/
+
+
+# =========================================================
+# 9. Database / Local storage / Upload files
+# =========================================================
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Database backup / dump files
+*.dump
+*.backup
+*.bak
+
+# User uploaded files / local storage
+uploads/
+storage/
+media/
+files/
+
+
+# =========================================================
+# 10. MinIO / Local object storage
+# =========================================================
+
+minio-data/
+data/minio/
+backend/minio-data/
+
+
+# =========================================================
+# 11. Temporary files
+# =========================================================
+
+tmp/
+temp/
+.tmp/
+*.tmp
+*.temp
+
+
+# =========================================================
+# 12. Test / Cache
+# =========================================================
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+coverage/
+.nyc_output/
+
+
+# =========================================================
+# 13. AI / Model / Dataset files
+# =========================================================
+
+models/
+checkpoints/
+datasets/
+wandb/
+mlruns/
+
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.h5
+*.pkl
+*.joblib
+
+
+# =========================================================
+# 14. Keep important example files
+# =========================================================
+
+!.env.example
+!README.md
+!docker-compose.yml
