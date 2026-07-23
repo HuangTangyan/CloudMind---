@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -34,8 +34,11 @@ import FileTypeIcon from './components/FileTypeIcon.vue'
 const API_BASE = '/api'
 const token = ref(localStorage.getItem('cloudmind-token') || '')
 const user = ref(JSON.parse(localStorage.getItem('cloudmind-user') || 'null'))
-const username = ref('admin')
-const password = ref('123456')
+const username = ref('')
+const password = ref('')
+const currentPassword = ref('')
+const newPassword = ref('')
+const confirmPassword = ref('')
 const message = ref('')
 const loading = ref(false)
 const sidebarOpen = ref(false)
@@ -64,12 +67,15 @@ const relatedItems = ref([])
 const versions = ref([])
 const mediaRef = ref(null)
 const playbackRate = ref(1)
+const activePreviewObjectUrl = ref('')
+const thumbnailUrls = ref({})
+let thumbnailGeneration = 0
 const targetDialog = ref({ visible: false, type: 'move', item: null, targetParentId: null, folders: [] })
 
 const adminTab = ref('dashboard')
 const adminUsers = ref([])
 const storageOverview = ref(null)
-const adminCreateForm = ref({ username: '', password: '123456', role: 'USER', quotaGb: 10 })
+const adminCreateForm = ref({ username: '', password: '', role: 'USER', quotaGb: 10 })
 const auditUsers = ref([])
 const auditItems = ref([])
 const auditBreadcrumb = ref([])
@@ -93,6 +99,7 @@ const adminEditDialog = ref({ visible: false, user: null, role: 'USER', quotaGb:
 
 const currentParentId = computed(() => breadcrumb.value[breadcrumb.value.length - 1]?.id ?? null)
 const isAdmin = computed(() => user.value?.role === 'ADMIN')
+const mustChangePassword = computed(() => Boolean(user.value?.mustChangePassword))
 const canDragUpload = computed(() => Boolean(user.value) && !['admin', 'trash', 'gallery', 'knowledge'].includes(viewMode.value))
 const loginMessageIsBanned = computed(() => String(message.value || '').includes('禁用') || String(message.value || '').includes('封禁'))
 const filteredAuditUsers = computed(() => {
@@ -412,6 +419,47 @@ function canShowImageThumb(item) {
   return item.kind === 'FILE' && (ct.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp)$/.test(name))
 }
 
+function clearThumbnailUrls() {
+  thumbnailGeneration += 1
+  Object.values(thumbnailUrls.value).forEach(url => URL.revokeObjectURL(url))
+  thumbnailUrls.value = {}
+}
+
+function hydrateThumbnails(nextItems) {
+  const generation = thumbnailGeneration
+  nextItems.filter(canShowImageThumb).forEach(async item => {
+    try {
+      const response = await request(`/files/${item.id}/download?disposition=inline`)
+      const objectUrl = URL.createObjectURL(await response.blob())
+      if (generation !== thumbnailGeneration) {
+        URL.revokeObjectURL(objectUrl)
+        return
+      }
+      thumbnailUrls.value = { ...thumbnailUrls.value, [item.id]: objectUrl }
+    } catch {
+      // A failed thumbnail must not block the file list.
+    }
+  })
+}
+
+function replaceItems(nextItems) {
+  clearThumbnailUrls()
+  items.value = Array.isArray(nextItems) ? nextItems : []
+  hydrateThumbnails(items.value)
+}
+
+function releasePreviewObjectUrl() {
+  if (activePreviewObjectUrl.value) {
+    URL.revokeObjectURL(activePreviewObjectUrl.value)
+    activePreviewObjectUrl.value = ''
+  }
+}
+
+function closePreview() {
+  previewVisible.value = false
+  releasePreviewObjectUrl()
+}
+
 function reviewText(status) {
   const value = (status || 'NORMAL').toUpperCase()
   if (value === 'ABNORMAL') return '异常'
@@ -482,7 +530,7 @@ function folderReviewTip(item) {
 
 async function request(path, options = {}) {
   const headers = options.headers ? { ...options.headers } : {}
-  if (token.value) headers['X-Token'] = token.value
+  if (token.value) headers.Authorization = `Bearer ${token.value}`
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers })
   const contentType = response.headers.get('content-type') || ''
   if (!response.ok) {
@@ -516,7 +564,8 @@ async function login() {
     localStorage.setItem('cloudmind-token', token.value)
     localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
     setMessage('登录成功')
-    await loadFiles(null, true)
+    password.value = ''
+    if (!mustChangePassword.value) await loadFiles(null, true)
   } catch (e) {
     setMessage(e.message)
   } finally {
@@ -537,6 +586,38 @@ async function register() {
     localStorage.setItem('cloudmind-token', token.value)
     localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
     setMessage('注册成功')
+    password.value = ''
+    await loadFiles(null, true)
+  } catch (e) {
+    setMessage(e.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function changePassword() {
+  if (newPassword.value !== confirmPassword.value) {
+    setMessage('两次输入的新密码不一致')
+    return
+  }
+  loading.value = true
+  try {
+    const res = await request('/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        currentPassword: currentPassword.value,
+        newPassword: newPassword.value
+      })
+    })
+    token.value = res.data.token
+    user.value = res.data.user
+    localStorage.setItem('cloudmind-token', token.value)
+    localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
+    currentPassword.value = ''
+    newPassword.value = ''
+    confirmPassword.value = ''
+    setMessage('密码已修改，请妥善保管新密码')
     await loadFiles(null, true)
   } catch (e) {
     setMessage(e.message)
@@ -548,7 +629,8 @@ async function register() {
 function logout() {
   token.value = ''
   user.value = null
-  items.value = []
+  replaceItems([])
+  releasePreviewObjectUrl()
   localStorage.removeItem('cloudmind-token')
   localStorage.removeItem('cloudmind-user')
 }
@@ -560,7 +642,7 @@ async function loadFiles(parentId = currentParentId.value, resetBreadcrumb = fal
     viewMode.value = 'files'
     const query = parentId == null ? '' : `?parentId=${parentId}`
     const res = await request(`/files${query}`)
-    items.value = res.data.items
+    replaceItems(res.data.items)
     clearSelected()
     clearRecommend()
     applyQuota(res.data)
@@ -576,7 +658,7 @@ async function loadTrash() {
   loading.value = true
   try {
     const res = await request('/files/trash')
-    items.value = res.data
+    replaceItems(res.data)
     clearSelected()
     clearRecommend()
     viewMode.value = 'trash'
@@ -591,7 +673,7 @@ async function loadGallery() {
   loading.value = true
   try {
     const res = await request('/files/gallery')
-    items.value = res.data
+    replaceItems(res.data)
     clearSelected()
     clearRecommend()
     viewMode.value = 'gallery'
@@ -816,6 +898,11 @@ async function downloadFile(item, admin = false) {
   }
 }
 
+async function authenticatedObjectUrl(path) {
+  const response = await request(path)
+  return URL.createObjectURL(await response.blob())
+}
+
 function openPreviewDataInNewTab(data, previewWindow = null) {
   const type = data.previewType
   if (['PDF', 'IMAGE', 'VIDEO', 'AUDIO'].includes(type)) {
@@ -852,12 +939,20 @@ async function previewFile(item, admin = false) {
     adminPreviewMode.value = admin
     const res = await request(admin ? `/admin/files/${item.id}/preview` : `/files/${item.id}/preview`)
     const data = res.data
+    releasePreviewObjectUrl()
+    if (['PDF', 'IMAGE', 'VIDEO', 'AUDIO'].includes(data.previewType) && data.inlinePath) {
+      data.inlineUrl = await authenticatedObjectUrl(data.inlinePath)
+      activePreviewObjectUrl.value = data.inlineUrl
+    }
     if (!admin) {
       focusFile.value = item
       request(`/files/${item.id}/related`).then(r => { sideRelatedItems.value = r.data || []
       collapsedRecommendGroups.value = [] }).catch(() => {})
     }
     if (openPreviewDataInNewTab(data, previewWindow)) {
+      const openedObjectUrl = activePreviewObjectUrl.value
+      activePreviewObjectUrl.value = ''
+      if (openedObjectUrl) window.setTimeout(() => URL.revokeObjectURL(openedObjectUrl), 300000)
       setMessage('已在新窗口打开预览')
       return
     }
@@ -880,6 +975,7 @@ async function previewFile(item, admin = false) {
     applyPlaybackRate()
   } catch (e) {
     if (previewWindow) previewWindow.close()
+    releasePreviewObjectUrl()
     setMessage(e.message)
   } finally {
     loading.value = false
@@ -1053,7 +1149,7 @@ async function searchFiles() {
   loading.value = true
   try {
     const res = await request(`/files/search?q=${encodeURIComponent(searchKeyword.value.trim())}`)
-    items.value = res.data
+    replaceItems(res.data)
     clearSelected()
     clearRecommend()
     viewMode.value = 'search'
@@ -1555,11 +1651,17 @@ onMounted(async () => {
     try {
       const res = await request('/auth/me')
       user.value = res.data
-      await loadFiles(null, true)
+      localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
+      if (!mustChangePassword.value) await loadFiles(null, true)
     } catch (e) {
       logout()
     }
   }
+})
+
+onBeforeUnmount(() => {
+  clearThumbnailUrls()
+  releasePreviewObjectUrl()
 })
 </script>
 
@@ -1580,17 +1682,43 @@ onMounted(async () => {
         <div class="login-card-head">
           <span class="eyebrow">Welcome back</span>
           <h2>登录 CloudMind</h2>
-          <p>测试账号：admin / 123456</p>
+          <p>请输入你的账号和密码。生产环境不会提供默认管理员凭据。</p>
         </div>
         <label for="login-username">用户名</label>
-        <input id="login-username" v-model="username" autocomplete="username" placeholder="admin" required />
+        <input id="login-username" v-model="username" autocomplete="username" placeholder="请输入用户名" required />
         <label for="login-password">密码</label>
-        <input id="login-password" v-model="password" type="password" autocomplete="current-password" placeholder="123456" required />
+        <input id="login-password" v-model="password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
         <div class="login-actions">
           <button type="submit" :disabled="loading">{{ loading ? '正在登录…' : '进入云盘' }}</button>
           <button type="button" :disabled="loading" class="soft" @click="register">注册账号</button>
         </div>
         <p v-if="message" class="message login-message" :class="{ danger: loginMessageIsBanned }" :role="loginMessageIsBanned ? 'alert' : 'status'">{{ message }}</p>
+      </form>
+    </section>
+
+    <section v-else-if="mustChangePassword" class="login-screen">
+      <div class="login-visual">
+        <AppBrand class="brand-line" />
+        <h1>首次登录，请先设置新密码</h1>
+        <p>管理员引导密码只用于首次部署。修改成功后，原登录令牌会立即失效。</p>
+      </div>
+      <form class="login-card" :aria-busy="loading" @submit.prevent="changePassword">
+        <div class="login-card-head">
+          <span class="eyebrow">Security check</span>
+          <h2>修改初始密码</h2>
+          <p>账号：{{ user.username }}</p>
+        </div>
+        <label for="current-password">当前密码</label>
+        <input id="current-password" v-model="currentPassword" type="password" autocomplete="current-password" required />
+        <label for="new-password">新密码</label>
+        <input id="new-password" v-model="newPassword" type="password" autocomplete="new-password" :minlength="isAdmin ? 14 : 6" maxlength="72" required />
+        <label for="confirm-password">确认新密码</label>
+        <input id="confirm-password" v-model="confirmPassword" type="password" autocomplete="new-password" :minlength="isAdmin ? 14 : 6" maxlength="72" required />
+        <div class="login-actions">
+          <button type="submit" :disabled="loading">{{ loading ? '正在修改…' : '保存新密码' }}</button>
+          <button type="button" class="soft" :disabled="loading" @click="logout">退出登录</button>
+        </div>
+        <p v-if="message" class="message login-message" role="status">{{ message }}</p>
       </form>
     </section>
 
@@ -1814,7 +1942,8 @@ onMounted(async () => {
             <div class="gallery">
               <div v-if="!items.length" class="empty">还没有图片</div>
               <button v-for="item in items" :key="item.id" type="button" class="photo-card" @click="previewFile(item)">
-                <img :src="`/api/files/${item.id}/download?disposition=inline&token=${token}`" :alt="item.name" />
+                <img v-if="thumbnailUrls[item.id]" :src="thumbnailUrls[item.id]" :alt="item.name" />
+                <FileTypeIcon v-else :item="item" :size="40" />
                 <strong>{{ item.name }}</strong>
                 <small>{{ formatDate(item.createdAt) }} · {{ formatSize(item.sizeBytes) }}</small>
               </button>
@@ -1891,7 +2020,7 @@ onMounted(async () => {
                 <div v-if="!items.length" class="empty grid-empty">当前没有内容</div>
                 <article v-for="item in items" :key="item.id" class="file-card" :class="{ focused: focusFile?.id === item.id }" @click="focusForRecommendation(item, $event)" @dblclick.stop="openItem(item)">
                   <div class="thumb" :class="fileTypeClass(item)">
-                    <img v-if="canShowImageThumb(item)" :src="`/api/files/${item.id}/download?disposition=inline&token=${token}`" :alt="item.name" />
+                    <img v-if="canShowImageThumb(item) && thumbnailUrls[item.id]" :src="thumbnailUrls[item.id]" :alt="item.name" />
                     <FileTypeIcon v-else :item="item" :size="34" />
                     <input v-if="viewMode !== 'trash'" type="checkbox" :aria-label="`选择 ${item.name}`" :checked="isSelected(item)" @click="toggleSelected(item, $event)" @dblclick.stop />
                   </div>
@@ -2129,11 +2258,11 @@ onMounted(async () => {
           </section>
         </template>
 
-        <div v-if="previewVisible && previewData" class="modal-mask" @click.self="previewVisible = false">
+        <div v-if="previewVisible && previewData" class="modal-mask" @click.self="closePreview">
           <section class="modal large" role="dialog" aria-modal="true" aria-labelledby="preview-dialog-title">
             <header class="modal-head">
               <div><h3 id="preview-dialog-title">{{ adminPreviewMode ? '审查预览：' : '' }}{{ previewData.name }}</h3><p>{{ formatSize(previewData.sizeBytes) }} · {{ tagText(previewData.tags) }}<template v-if="adminPreviewMode"> · 状态：{{ reviewText(previewData.reviewStatus) }}</template></p></div>
-              <div class="actions"><button v-if="adminPreviewMode" class="soft" @click="downloadFile(previewData, true)">无法预览时下载</button><button class="soft" aria-label="关闭预览" @click="previewVisible = false"><X :size="17" />关闭</button></div>
+              <div class="actions"><button v-if="adminPreviewMode" class="soft" @click="downloadFile(previewData, true)">无法预览时下载</button><button class="soft" aria-label="关闭预览" @click="closePreview"><X :size="17" />关闭</button></div>
             </header>
             <p class="summary-box">{{ previewData.summary || '暂无摘要' }}</p>
             <div v-if="previewData.previewType === 'VIDEO' || previewData.previewType === 'AUDIO'" class="media-tools"><span>播放倍速</span><select v-model.number="playbackRate" @change="applyPlaybackRate"><option :value="0.5">0.5x</option><option :value="1">1x</option><option :value="1.25">1.25x</option><option :value="1.5">1.5x</option><option :value="2">2x</option></select></div>

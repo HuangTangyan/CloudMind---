@@ -90,20 +90,16 @@ public class AdminController {
     }
 
     @GetMapping("/files/{fileId}/preview")
-    public Map<String, Object> preview(@RequestHeader(value = "X-Token", required = false) String headerToken,
-                                       @RequestParam(value = "token", required = false) String queryToken,
+    public Map<String, Object> preview(@RequestHeader(value = "X-Token", required = false) String token,
                                        @PathVariable Long fileId) {
-        String token = headerToken != null ? headerToken : queryToken;
         authService.requireAdmin(token);
-        return Map.of("success", true, "data", fileService.adminPreview(fileId, token));
+        return Map.of("success", true, "data", fileService.adminPreview(fileId));
     }
 
     @GetMapping("/files/{fileId}/download")
-    public ResponseEntity<InputStreamResource> download(@RequestHeader(value = "X-Token", required = false) String headerToken,
-                                                        @RequestParam(value = "token", required = false) String queryToken,
+    public ResponseEntity<InputStreamResource> download(@RequestHeader(value = "X-Token", required = false) String token,
                                                         @RequestParam(value = "disposition", required = false, defaultValue = "attachment") String disposition,
                                                         @PathVariable Long fileId) {
-        String token = headerToken != null ? headerToken : queryToken;
         authService.requireAdmin(token);
         return fileService.adminDownload(fileId, "inline".equalsIgnoreCase(disposition));
     }

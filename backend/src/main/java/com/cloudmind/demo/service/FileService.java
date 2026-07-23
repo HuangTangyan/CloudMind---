@@ -245,12 +245,12 @@ public class FileService {
                 .body(resource);
     }
 
-    public Map<String, Object> preview(AppUser user, Long fileId, String token) {
+    public Map<String, Object> preview(AppUser user, Long fileId) {
         CloudFile file = requireFile(user, fileId, false);
         Map<String, Object> map = toMap(file);
         map.put("previewType", previewType(file));
         map.put("text", Optional.ofNullable(file.getExtractedText()).orElse(""));
-        map.put("inlineUrl", "/api/files/" + file.getId() + "/download?disposition=inline&token=" + token);
+        map.put("inlinePath", "/files/" + file.getId() + "/download?disposition=inline");
         return map;
     }
 
@@ -392,13 +392,13 @@ public class FileService {
         return downloadRaw(file, inline);
     }
 
-    public Map<String, Object> adminPreview(Long fileId, String token) {
+    public Map<String, Object> adminPreview(Long fileId) {
         CloudFile file = requireAdminFile(fileId);
         Map<String, Object> map = toMap(file);
         map.put("previewType", previewType(file));
         map.put("text", Optional.ofNullable(file.getExtractedText()).orElse(""));
-        map.put("inlineUrl", "/api/admin/files/" + file.getId() + "/download?disposition=inline&token=" + token);
-        map.put("downloadUrl", "/api/admin/files/" + file.getId() + "/download?disposition=attachment&token=" + token);
+        map.put("inlinePath", "/admin/files/" + file.getId() + "/download?disposition=inline");
+        map.put("downloadPath", "/admin/files/" + file.getId() + "/download?disposition=attachment");
         return map;
     }
 

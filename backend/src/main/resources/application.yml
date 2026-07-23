@@ -1,38 +1,37 @@
 server:
-  port: 18080
+  port: ${SERVER_PORT:18080}
 
 spring:
   application:
     name: cloudmind-backend
-
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - optional:file:../.env[.properties]
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/cloudmind?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
-    username: cloudmind
-    password: cloudmind123
-
   jpa:
-    hibernate:
-      ddl-auto: update
     open-in-view: false
     show-sql: false
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
         dialect: org.hibernate.dialect.MySQLDialect
-
   servlet:
     multipart:
-      max-file-size: 1024MB
-      max-request-size: 1024MB
+      max-file-size: ${MAX_FILE_SIZE:100MB}
+      max-request-size: ${MAX_REQUEST_SIZE:100MB}
 
 cloudmind:
   minio:
-    endpoint: http://localhost:9000
-    access-key: minioadmin
-    secret-key: minioadmin
-    bucket: cloudmind
+    bucket: ${MINIO_BUCKET:cloudmind}
+  bootstrap-admin:
+    username: ${CLOUDMIND_BOOTSTRAP_ADMIN_USERNAME:}
+    password: ${CLOUDMIND_BOOTSTRAP_ADMIN_PASSWORD:}
   demo:
-    admin-username: admin
-    admin-password: 123456
-    default-quota-bytes: 10737418240 # 10GB
+    default-quota-bytes: ${DEFAULT_QUOTA_BYTES:10737418240}
+  ai:
+    api-key: ${CLOUDMIND_AI_API_KEY:}
+    require-environment-key: false

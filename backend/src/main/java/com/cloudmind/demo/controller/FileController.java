@@ -77,22 +77,18 @@ public class FileController {
     }
 
     @GetMapping("/{id}/download")
-    public ResponseEntity<InputStreamResource> download(@RequestHeader(value = "X-Token", required = false) String headerToken,
-                                                        @RequestParam(value = "token", required = false) String queryToken,
+    public ResponseEntity<InputStreamResource> download(@RequestHeader(value = "X-Token", required = false) String token,
                                                         @RequestParam(value = "disposition", required = false, defaultValue = "attachment") String disposition,
                                                         @PathVariable Long id) {
-        String token = headerToken != null ? headerToken : queryToken;
         AppUser user = authService.requireUser(token);
         return fileService.download(user, id, "inline".equalsIgnoreCase(disposition));
     }
 
     @GetMapping("/{id}/preview")
-    public Map<String, Object> preview(@RequestHeader(value = "X-Token", required = false) String headerToken,
-                                       @RequestParam(value = "token", required = false) String queryToken,
+    public Map<String, Object> preview(@RequestHeader(value = "X-Token", required = false) String token,
                                        @PathVariable Long id) {
-        String token = headerToken != null ? headerToken : queryToken;
         AppUser user = authService.requireUser(token);
-        return Map.of("success", true, "data", fileService.preview(user, id, token));
+        return Map.of("success", true, "data", fileService.preview(user, id));
     }
 
     @GetMapping("/{id}")

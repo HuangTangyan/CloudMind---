@@ -7,6 +7,7 @@ import com.cloudmind.demo.repository.AiConfigRepository;
 import com.cloudmind.demo.repository.CloudFileRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +23,10 @@ public class AiConfigService {
     private final AiConfigRepository configRepository;
     private final CloudFileRepository fileRepository;
     private final ObjectMapper objectMapper;
+    @Value("${cloudmind.ai.api-key:}")
+    private String environmentApiKey;
+    @Value("${cloudmind.ai.require-environment-key:false}")
+    private boolean requireEnvironmentKey;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(12))
             .build();
@@ -35,12 +40,17 @@ public class AiConfigService {
     }
 
     public AiConfig getOrCreate() {
-        return configRepository.findById(1L).orElseGet(() -> {
-            AiConfig config = new AiConfig();
-            config.setId(1L);
-            config.setReviewPrompt(defaultReviewPrompt());
-            return configRepository.save(config);
+        AiConfig config = configRepository.findById(1L).orElseGet(() -> {
+            AiConfig created = new AiConfig();
+            created.setId(1L);
+            created.setReviewPrompt(defaultReviewPrompt());
+            return configRepository.save(created);
         });
+        if (requireEnvironmentKey && config.getApiKey() != null && !config.getApiKey().isBlank()) {
+            config.setApiKey(null);
+            config = configRepository.save(config);
+        }
+        return config;
     }
 
     public Map<String, Object> getConfigForAdmin() {
@@ -51,7 +61,8 @@ public class AiConfigService {
         map.put("baseUrl", config.getBaseUrl());
         map.put("model", config.getModel());
         map.put("apiKey", "");
-        map.put("hasApiKey", config.getApiKey() != null && !config.getApiKey().isBlank());
+        map.put("hasApiKey", !effectiveApiKey(config).isBlank());
+        map.put("apiKeyManagedExternally", requireEnvironmentKey || !environmentApiKey.isBlank());
         map.put("reviewPrompt", config.getReviewPrompt() == null || config.getReviewPrompt().isBlank() ? defaultReviewPrompt() : config.getReviewPrompt());
         map.put("updatedAt", config.getUpdatedAt());
         return map;
@@ -67,7 +78,12 @@ public class AiConfigService {
         if (body.containsKey("reviewPrompt")) config.setReviewPrompt(clean(String.valueOf(body.get("reviewPrompt")), defaultReviewPrompt()));
         if (body.containsKey("apiKey")) {
             String key = String.valueOf(body.getOrDefault("apiKey", "")).trim();
-            if (!key.isBlank() && !"KEEP_EXISTING".equals(key)) config.setApiKey(key);
+            if (!key.isBlank() && !"KEEP_EXISTING".equals(key)) {
+                if (requireEnvironmentKey) {
+                    throw new IllegalArgumentException("生产环境的 AI API Key 只能通过 CLOUDMIND_AI_API_KEY 注入");
+                }
+                config.setApiKey(key);
+            }
         }
         configRepository.save(config);
         return getConfigForAdmin();
@@ -78,11 +94,12 @@ public class AiConfigService {
         if (!Boolean.TRUE.equals(config.getEnabled())) {
             return Map.of("ok", false, "message", "AI 审查未启用。请先勾选启用 AI 审查并保存配置。");
         }
-        if (config.getApiKey() == null || config.getApiKey().isBlank()) {
+        String apiKey = effectiveApiKey(config);
+        if (apiKey.isBlank()) {
             return Map.of("ok", false, "message", "API Key 为空。请填写 Key 后保存。");
         }
         try {
-            String content = callChat(config, "只回复：连接成功", "这是 CloudMind 管理后台连接测试。", 600);
+            String content = callChat(config, apiKey, "只回复：连接成功", "这是 CloudMind 管理后台连接测试。", 600);
             return Map.of("ok", true, "message", content == null || content.isBlank() ? "AI 接口已返回响应。" : content);
         } catch (Exception e) {
             return Map.of("ok", false, "message", "连接失败：" + e.getMessage());
@@ -162,7 +179,8 @@ public class AiConfigService {
     private ReviewResult reviewByAiOrRule(CloudFile file) {
         AiConfig config = getOrCreate();
         String content = fileContentForReview(file);
-        if (!Boolean.TRUE.equals(config.getEnabled()) || config.getApiKey() == null || config.getApiKey().isBlank()) {
+        String apiKey = effectiveApiKey(config);
+        if (!Boolean.TRUE.equals(config.getEnabled()) || apiKey.isBlank()) {
             return localRuleReview(file, content);
         }
         try {
@@ -170,7 +188,7 @@ public class AiConfigService {
                     ? defaultReviewPrompt()
                     : config.getReviewPrompt();
             systemPrompt = systemPrompt + "\n\n无论上面的提示词如何，请最终严格按四行返回：status=NORMAL/ABNORMAL/PENDING；summary=80字以内中文摘要；tags=3到8个中文标签，用英文逗号分隔；note=简短审查原因。";
-            String aiResponse = callChat(config, systemPrompt, content, 1800);
+            String aiResponse = callChat(config, apiKey, systemPrompt, content, 1800);
             String status = parseStatus(aiResponse);
             String summary = firstNonBlank(parseField(aiResponse, "summary"), parseField(aiResponse, "摘要"));
             String tags = firstNonBlank(parseField(aiResponse, "tags"), parseField(aiResponse, "标签"));
@@ -203,7 +221,7 @@ public class AiConfigService {
                 + "正文片段：\n" + text;
     }
 
-    private String callChat(AiConfig config, String systemPrompt, String userContent, int maxTokens) throws Exception {
+    private String callChat(AiConfig config, String apiKey, String systemPrompt, String userContent, int maxTokens) throws Exception {
         String base = config.getBaseUrl() == null ? "" : config.getBaseUrl().trim();
         if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
         String url = base.endsWith("/chat/completions") ? base : base + "/chat/completions";
@@ -222,7 +240,7 @@ public class AiConfigService {
                 .uri(URI.create(url))
                 .timeout(Duration.ofSeconds(30))
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + config.getApiKey())
+                .header("Authorization", "Bearer " + apiKey)
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -275,6 +293,13 @@ public class AiConfigService {
 
     private String defaultReviewPrompt() {
         return "你是 CloudMind 网盘的内容安全审查与文档分析助手。请根据文件名、正文片段生成摘要和标签，并判断内容安全风险。请严格按四行返回：status=NORMAL/ABNORMAL/PENDING；summary=80字以内中文摘要；tags=3到8个中文标签，用英文逗号分隔；note=简短审查原因。不要输出其他内容。";
+    }
+
+    private String effectiveApiKey(AiConfig config) {
+        String environmentValue = environmentApiKey == null ? "" : environmentApiKey.trim();
+        if (!environmentValue.isBlank()) return environmentValue;
+        if (requireEnvironmentKey) return "";
+        return config.getApiKey() == null ? "" : config.getApiKey().trim();
     }
 
     private String clean(String value, String fallback) {

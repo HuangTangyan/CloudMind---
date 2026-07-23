@@ -31,6 +31,8 @@ public class AppUser {
     @Column(nullable = false)
     private Instant createdAt;
 
+    private Instant passwordChangedAt;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) createdAt = Instant.now();
@@ -55,4 +57,6 @@ public class AppUser {
     public void setQuotaBytes(Long quotaBytes) { this.quotaBytes = quotaBytes; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public Instant getPasswordChangedAt() { return passwordChangedAt; }
+    public void setPasswordChangedAt(Instant passwordChangedAt) { this.passwordChangedAt = passwordChangedAt; }
 }

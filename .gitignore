@@ -21,6 +21,10 @@ settings.local.*
 application-local.*
 application-dev.*
 application-test.*
+application-prod-local.*
+!backend/src/main/resources/application-dev.yml
+secrets/
+*.secret
 
 # Secret / credential files
 *.pem

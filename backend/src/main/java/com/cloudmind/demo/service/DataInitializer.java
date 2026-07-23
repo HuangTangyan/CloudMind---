@@ -8,10 +8,10 @@ import org.springframework.stereotype.Component;
 public class DataInitializer implements CommandLineRunner {
     private final AuthService authService;
 
-    @Value("${cloudmind.demo.admin-username:admin}")
+    @Value("${cloudmind.bootstrap-admin.username:}")
     private String adminUsername;
 
-    @Value("${cloudmind.demo.admin-password:123456}")
+    @Value("${cloudmind.bootstrap-admin.password:}")
     private String adminPassword;
 
     public DataInitializer(AuthService authService) {

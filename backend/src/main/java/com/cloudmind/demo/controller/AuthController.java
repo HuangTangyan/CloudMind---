@@ -1,5 +1,6 @@
 package com.cloudmind.demo.controller;
 
+import com.cloudmind.demo.dto.ChangePasswordRequest;
 import com.cloudmind.demo.dto.LoginRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.service.AuthService;
@@ -31,7 +32,19 @@ public class AuthController {
 
     @GetMapping("/me")
     public Map<String, Object> me(@RequestHeader(value = "X-Token", required = false) String token) {
-        AppUser user = authService.requireUser(token);
+        AppUser user = authService.requireSessionUser(token);
         return Map.of("success", true, "data", authService.toUserMap(user));
+    }
+
+    @PostMapping("/change-password")
+    public Map<String, Object> changePassword(
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @Valid @RequestBody ChangePasswordRequest request
+    ) {
+        return Map.of(
+                "success", true,
+                "message", "密码修改成功",
+                "data", authService.changePassword(token, request.getCurrentPassword(), request.getNewPassword())
+        );
     }
 }
