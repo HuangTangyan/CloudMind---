@@ -9,9 +9,9 @@
     "preview": "vite preview --host 0.0.0.0 --port 5173"
   },
   "dependencies": {
+    "@lucide/vue": "^1.25.0",
     "@vitejs/plugin-vue": "latest",
     "vite": "latest",
     "vue": "latest"
-  },
-  "devDependencies": {}
+  }
 }

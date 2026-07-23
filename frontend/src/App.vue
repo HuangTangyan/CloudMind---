@@ -1,5 +1,35 @@
 <script setup>
 import { computed, nextTick, onMounted, ref } from 'vue'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Bot,
+  ClipboardCheck,
+  Cloud,
+  FilePlus2,
+  FileText,
+  Folder,
+  FolderPlus,
+  HardDrive,
+  Home,
+  Images,
+  LayoutGrid,
+  List,
+  LoaderCircle,
+  LogOut,
+  Menu,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Upload,
+  Users,
+  Video,
+  WandSparkles,
+  X,
+} from '@lucide/vue'
+import AppBrand from './components/AppBrand.vue'
+import FileTypeIcon from './components/FileTypeIcon.vue'
 
 const API_BASE = '/api'
 const token = ref(localStorage.getItem('cloudmind-token') || '')
@@ -8,6 +38,7 @@ const username = ref('admin')
 const password = ref('123456')
 const message = ref('')
 const loading = ref(false)
+const sidebarOpen = ref(false)
 const items = ref([])
 const usedBytes = ref(0)
 const quotaBytes = ref(0)
@@ -126,10 +157,10 @@ const imageFileCount = computed(() => activeFileItems.value.filter(item => fileT
 const videoFileCount = computed(() => activeFileItems.value.filter(item => fileTypeClass(item) === 'video').length)
 const documentFileCount = computed(() => activeFileItems.value.filter(item => ['pdf', 'word', 'text', 'ppt', 'sheet', 'doc'].includes(fileTypeClass(item))).length)
 const rootDashboardStats = computed(() => [
-  { label: '当前目录文件', value: activeFileItems.value.length, hint: `${activeFolderItems.value.length} 个文件夹`, icon: '📄' },
-  { label: '图片资料', value: imageFileCount.value, hint: '可进入相册集中查看', icon: '🖼️' },
-  { label: '文档资料', value: documentFileCount.value, hint: '摘要与标签自动生成', icon: '📝' },
-  { label: '视频资料', value: videoFileCount.value, hint: '支持在线播放与倍速', icon: '🎬' }
+  { label: '当前目录文件', value: activeFileItems.value.length, hint: `${activeFolderItems.value.length} 个文件夹`, icon: FileText },
+  { label: '图片资料', value: imageFileCount.value, hint: '可进入相册集中查看', icon: Images },
+  { label: '文档资料', value: documentFileCount.value, hint: '摘要与标签自动生成', icon: FileText },
+  { label: '视频资料', value: videoFileCount.value, hint: '支持在线播放与倍速', icon: Video }
 ])
 const adminTotalUsers = computed(() => storageOverview.value?.userCount || adminUsers.value.length || 0)
 const adminTotalFiles = computed(() => storageOverview.value?.activeFileCount || 0)
@@ -143,11 +174,11 @@ const adminTopRiskUsers = computed(() => [...adminUsers.value]
   .filter(u => Number(u.abnormalCount || 0) > 0 || !u.enabled)
   .slice(0, 5))
 const adminKpis = computed(() => [
-  { label: '总用户数', value: adminTotalUsers.value.toLocaleString(), trend: `封禁 ${adminDisabledUsers.value}`, icon: '👥' },
-  { label: '总文件数', value: adminTotalFiles.value.toLocaleString(), trend: `${adminTotalFolders.value.toLocaleString()} 个文件夹`, icon: '📁' },
-  { label: '服务器已用', value: formatSize(storageOverview.value?.serverUsedBytes || 0), trend: `占用 ${formatPercent(storageOverview.value?.serverUsedPercent || 0)}`, icon: '☁️' },
-  { label: '异常文件', value: adminAbnormalFiles.value.toLocaleString(), trend: `${adminAbnormalUsers.value} 个用户需关注`, icon: '⚠️', danger: adminAbnormalFiles.value > 0 },
-  { label: '回收站占用', value: formatSize(storageOverview.value?.deletedFileBytes || 0), trend: `${storageOverview.value?.deletedFileCount || 0} 个文件`, icon: '🗑️' }
+  { label: '总用户数', value: adminTotalUsers.value.toLocaleString(), trend: `封禁 ${adminDisabledUsers.value}`, icon: Users },
+  { label: '总文件数', value: adminTotalFiles.value.toLocaleString(), trend: `${adminTotalFolders.value.toLocaleString()} 个文件夹`, icon: FileText },
+  { label: '服务器已用', value: formatSize(storageOverview.value?.serverUsedBytes || 0), trend: `占用 ${formatPercent(storageOverview.value?.serverUsedPercent || 0)}`, icon: Cloud },
+  { label: '异常文件', value: adminAbnormalFiles.value.toLocaleString(), trend: `${adminAbnormalUsers.value} 个用户需关注`, icon: AlertTriangle, danger: adminAbnormalFiles.value > 0 },
+  { label: '回收站占用', value: formatSize(storageOverview.value?.deletedFileBytes || 0), trend: `${storageOverview.value?.deletedFileCount || 0} 个文件`, icon: Trash2 }
 ])
 
 
@@ -338,17 +369,6 @@ function buildRecommendGroups(baseFile, related) {
 function setFileDisplayMode(mode) {
   fileDisplayMode.value = mode
   localStorage.setItem('cloudmind-file-display', mode)
-}
-
-function previewIcon(item) {
-  if (item.kind === 'FOLDER') return '📁'
-  const ct = (item.contentType || '').toLowerCase()
-  const name = (item.name || '').toLowerCase()
-  if (ct.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp)$/.test(name)) return '🖼️'
-  if (ct.startsWith('video/') || /\.(mp4|webm|ogg|mov)$/.test(name)) return '🎬'
-  if (ct.startsWith('audio/') || /\.(mp3|wav|ogg)$/.test(name)) return '🎵'
-  if (name.endsWith('.pdf')) return '📕'
-  return '📄'
 }
 
 function fileTypeClass(item) {
@@ -1547,10 +1567,7 @@ onMounted(async () => {
   <main class="app-shell" :class="{ 'page-drag-active': dragActive }" @dragenter.prevent="beginDragUpload" @dragover.prevent="keepDragUpload" @dragleave.prevent="leaveDragUpload" @drop.prevent="handleDrop">
     <section v-if="!user" class="login-screen">
       <div class="login-visual">
-        <div class="brand-line">
-          <span class="cloud-logo">☁</span>
-          <strong>CloudMind</strong>
-        </div>
+        <AppBrand class="brand-line" />
         <h1>智能云盘，让资料管理更像产品级工具</h1>
         <p>上传、检索、预览、相似推荐、AI 问答和管理员审查整合在同一个界面，适合作品展示和真实使用。</p>
         <div class="login-metrics">
@@ -1559,48 +1576,49 @@ onMounted(async () => {
           <span><b>Cloud</b> 文件管理</span>
         </div>
       </div>
-      <div class="login-card">
+      <form class="login-card" :aria-busy="loading" @submit.prevent="login">
         <div class="login-card-head">
           <span class="eyebrow">Welcome back</span>
           <h2>登录 CloudMind</h2>
           <p>测试账号：admin / 123456</p>
         </div>
-        <label>用户名</label>
-        <input v-model="username" placeholder="admin" @keyup.enter="login" />
-        <label>密码</label>
-        <input v-model="password" type="password" placeholder="123456" @keyup.enter="login" />
+        <label for="login-username">用户名</label>
+        <input id="login-username" v-model="username" autocomplete="username" placeholder="admin" required />
+        <label for="login-password">密码</label>
+        <input id="login-password" v-model="password" type="password" autocomplete="current-password" placeholder="123456" required />
         <div class="login-actions">
-          <button :disabled="loading" @click="login">进入云盘</button>
-          <button :disabled="loading" class="soft" @click="register">注册账号</button>
+          <button type="submit" :disabled="loading">{{ loading ? '正在登录…' : '进入云盘' }}</button>
+          <button type="button" :disabled="loading" class="soft" @click="register">注册账号</button>
         </div>
-        <p v-if="message" class="message login-message" :class="{ danger: loginMessageIsBanned }">{{ loginMessageIsBanned ? '⚠️ ' : '' }}{{ message }}</p>
-      </div>
+        <p v-if="message" class="message login-message" :class="{ danger: loginMessageIsBanned }" :role="loginMessageIsBanned ? 'alert' : 'status'">{{ message }}</p>
+      </form>
     </section>
 
     <section v-else class="cloud-layout">
-      <aside class="sidebar" :class="{ admin: viewMode === 'admin' }">
+      <button v-if="sidebarOpen" class="sidebar-backdrop" aria-label="关闭导航" @click="sidebarOpen = false"></button>
+      <aside class="sidebar" :class="{ admin: viewMode === 'admin', open: sidebarOpen }" :aria-label="viewMode === 'admin' ? '管理导航' : '主导航'">
         <div class="sidebar-brand">
-          <span class="cloud-logo">☁</span>
-          <strong>CloudMind</strong>
+          <AppBrand compact />
+          <button class="mobile-nav-close" aria-label="关闭导航" @click="sidebarOpen = false"><X :size="20" /></button>
         </div>
 
-        <nav v-if="viewMode !== 'admin'" class="side-nav">
-          <button :class="{ active: viewMode === 'files' || viewMode === 'search' }" @click="loadFiles(null, true)"><span>📁</span>全部文件</button>
-          <button :class="{ active: viewMode === 'gallery' }" @click="loadGallery"><span>🖼️</span>图片</button>
-          <button @click="quickSearch('视频')"><span>🎞️</span>视频</button>
-          <button @click="quickSearch('文档')"><span>📄</span>文档</button>
-          <button :class="{ active: viewMode === 'knowledge' }" @click="openKnowledge"><span>✨</span>AI 助手 <em>Beta</em></button>
-          <button :class="{ active: viewMode === 'trash' }" @click="loadTrash"><span>🗑️</span>回收站</button>
-          <button v-if="isAdmin" class="admin-entry" @click="openAdmin('dashboard')"><span>🛡️</span>管理员控制台</button>
+        <nav v-if="viewMode !== 'admin'" class="side-nav" aria-label="文件与知识库" @click="sidebarOpen = false">
+          <button :class="{ active: viewMode === 'files' || viewMode === 'search' }" @click="loadFiles(null, true)"><Folder :size="19" />全部文件</button>
+          <button :class="{ active: viewMode === 'gallery' }" @click="loadGallery"><Images :size="19" />图片</button>
+          <button @click="quickSearch('视频')"><Video :size="19" />视频</button>
+          <button @click="quickSearch('文档')"><FileText :size="19" />文档</button>
+          <button :class="{ active: viewMode === 'knowledge' }" @click="openKnowledge"><Sparkles :size="19" />AI 助手 <em>Beta</em></button>
+          <button :class="{ active: viewMode === 'trash' }" @click="loadTrash"><Trash2 :size="19" />回收站</button>
+          <button v-if="isAdmin" class="admin-entry" @click="openAdmin('dashboard')"><ShieldCheck :size="19" />管理员控制台</button>
         </nav>
 
-        <nav v-else class="side-nav admin-nav">
-          <button :class="{ active: adminTab === 'dashboard' }" @click="openAdmin('dashboard')"><span>🏠</span>控制台</button>
-          <button :class="{ active: adminTab === 'users' }" @click="openAdmin('users')"><span>👥</span>用户管理</button>
-          <button :class="{ active: adminTab === 'audit' }" @click="openAdmin('audit')"><span>📋</span>文件审核 <em>{{ adminAbnormalFiles }}</em></button>
-          <button :class="{ active: adminTab === 'storage' }" @click="openAdmin('storage')"><span>💾</span>存储监控</button>
-          <button :class="{ active: adminTab === 'ai' }" @click="openAdmin('ai')"><span>🤖</span>AI 审核</button>
-          <button @click="loadFiles(null, true)"><span>↩</span>返回网盘</button>
+        <nav v-else class="side-nav admin-nav" aria-label="管理员功能" @click="sidebarOpen = false">
+          <button :class="{ active: adminTab === 'dashboard' }" @click="openAdmin('dashboard')"><Home :size="19" />控制台</button>
+          <button :class="{ active: adminTab === 'users' }" @click="openAdmin('users')"><Users :size="19" />用户管理</button>
+          <button :class="{ active: adminTab === 'audit' }" @click="openAdmin('audit')"><ClipboardCheck :size="19" />文件审核 <em>{{ adminAbnormalFiles }}</em></button>
+          <button :class="{ active: adminTab === 'storage' }" @click="openAdmin('storage')"><HardDrive :size="19" />存储监控</button>
+          <button :class="{ active: adminTab === 'ai' }" @click="openAdmin('ai')"><Bot :size="19" />AI 审核</button>
+          <button @click="loadFiles(null, true)"><ArrowLeft :size="19" />返回网盘</button>
         </nav>
 
         <div class="side-storage-card" v-if="viewMode !== 'admin'">
@@ -1618,11 +1636,12 @@ onMounted(async () => {
         </div>
       </aside>
 
-      <section class="workspace">
+      <section id="main-content" class="workspace">
         <header class="topbar">
+          <button class="mobile-nav-trigger" :aria-expanded="sidebarOpen" aria-label="打开导航" @click="sidebarOpen = true"><Menu :size="21" /></button>
           <div class="global-search" v-if="viewMode !== 'admin'">
-            <span>⌕</span>
-            <input v-model="searchKeyword" placeholder="搜索文件、文件夹、标签或内容（/ 快捷键）" @keyup.enter="searchFiles" />
+            <Search :size="18" aria-hidden="true" />
+            <input v-model="searchKeyword" aria-label="搜索文件、文件夹、标签或内容" placeholder="搜索文件、文件夹、标签或内容（/ 快捷键）" @keyup.enter="searchFiles" />
             <button @click="searchFiles">搜索</button>
           </div>
           <div v-else class="admin-titlebar">
@@ -1631,12 +1650,12 @@ onMounted(async () => {
           </div>
           <div class="top-actions">
             <template v-if="viewMode !== 'admin'">
-              <button class="primary" :disabled="['trash', 'gallery', 'knowledge'].includes(viewMode)" @click="fileInput?.click()">⬆ 上传文件</button>
-              <button class="split" :disabled="['trash', 'gallery', 'knowledge'].includes(viewMode)" @click="folderInput?.click()">上传文件夹</button>
-              <button class="soft" :disabled="['trash', 'gallery', 'knowledge'].includes(viewMode)" @click="createFolder">＋ 新建</button>
+              <button class="primary top-action-button" :disabled="['trash', 'gallery', 'knowledge'].includes(viewMode)" @click="fileInput?.click()"><Upload :size="17" />上传文件</button>
+              <button class="soft top-action-button secondary-upload" :disabled="['trash', 'gallery', 'knowledge'].includes(viewMode)" @click="folderInput?.click()"><FolderPlus :size="17" />上传文件夹</button>
+              <button class="soft top-action-button" :disabled="['trash', 'gallery', 'knowledge'].includes(viewMode)" @click="createFolder"><FilePlus2 :size="17" />新建</button>
             </template>
             <template v-else>
-              <button class="primary" @click="openAdmin('ai')">🤖 AI 审核配置</button>
+              <button class="primary top-action-button" @click="openAdmin('ai')"><Bot :size="17" />AI 审核配置</button>
               <button class="soft" @click="loadFiles(null, true)">返回网盘</button>
             </template>
             <input ref="fileInput" type="file" multiple hidden @change="uploadFiles" />
@@ -1644,7 +1663,7 @@ onMounted(async () => {
             <div class="user-menu">
               <span class="avatar">{{ shortName(user.username) }}</span>
               <div><b>{{ user.username }}</b><small>{{ user.role }}</small></div>
-              <button class="icon-btn" @click="logout">退出</button>
+              <button class="icon-btn logout-button" aria-label="退出登录" title="退出登录" @click="logout"><LogOut :size="17" /><span>退出</span></button>
             </div>
           </div>
         </header>
@@ -1654,22 +1673,24 @@ onMounted(async () => {
           <span>文件或文件夹会自动上传到当前目录：{{ currentFolderName }}</span>
         </div>
 
-        <p v-if="message" class="message toast-message">{{ message }}</p>
+        <p v-if="message" class="message toast-message" role="status" aria-live="polite">{{ message }}</p>
 
         <template v-if="viewMode !== 'admin'">
           <section v-if="isRootFiles" class="home-grid">
             <div class="hero-card">
               <div>
                 <span class="eyebrow">CloudMind Drive</span>
-                <h1>上午好，{{ user.username }} 👋</h1>
+                <h1>上午好，{{ user.username }}</h1>
                 <p>你的专属智能云盘，AI 帮你高效管理文件。</p>
                 <div class="hero-actions">
-                  <button @click="fileInput?.click()">智能整理上传</button>
-                  <button class="soft" @click="openKnowledge">文件摘要问答</button>
+                  <button @click="fileInput?.click()"><WandSparkles :size="17" />智能整理上传</button>
+                  <button class="soft" @click="openKnowledge"><Sparkles :size="17" />文件摘要问答</button>
                 </div>
               </div>
-              <div class="cloud-illustration">
-                <span>☁️</span><i>📄</i><em>✨</em>
+              <div class="cloud-illustration" aria-hidden="true">
+                <Cloud :size="86" :stroke-width="1.25" />
+                <FileText :size="34" :stroke-width="1.7" />
+                <Sparkles :size="27" :stroke-width="1.7" />
               </div>
             </div>
 
@@ -1677,7 +1698,7 @@ onMounted(async () => {
             <div class="recent-card panel-card">
               <div class="panel-head"><h3>最近访问</h3><button class="link" @click="loadFiles(null, true)">全部 ›</button></div>
               <button v-for="item in recentActiveItems" :key="item.id" class="recent-item" @click="item.kind === 'FOLDER' ? openFolder(item) : previewFile(item)">
-                <span :class="['file-icon', fileTypeClass(item)]">{{ previewIcon(item) }}</span>
+                <FileTypeIcon :item="item" :class="['file-icon', fileTypeClass(item)]" />
                 <b>{{ item.name }}</b>
                 <small>{{ fileTypeLabel(item) }} · {{ formatTime(item.updatedAt || item.createdAt) }}</small>
                 <em v-if="item.summary">AI 摘要</em>
@@ -1730,7 +1751,7 @@ onMounted(async () => {
                       <details v-if="msg.sources?.length" class="source-list compact-source-list">
                         <summary>参考来源（{{ msg.sources.length }}）</summary>
                         <button v-for="source in msg.sources" :key="source.id" @click="previewFile(source)">
-                          <span>📄 {{ source.name }}</span>
+                          <span class="source-name"><FileTypeIcon :item="source" :size="16" />{{ source.name }}</span>
                           <small>{{ source.snippet || source.summary || '相关资料' }}</small>
                         </button>
                       </details>
@@ -1773,7 +1794,7 @@ onMounted(async () => {
                   <p v-if="knowledgeScopeType === 'FILE'" class="multi-select-tip">可连续点击选择多个文件，再统一问答或生成概述。</p>
                   <div class="source-picker-list">
                     <button v-for="item in filteredKnowledgeSources" :key="item.id" :class="{ selected: isKnowledgeSourceSelected(item) }" @click="selectKnowledgeSource(item)">
-                      <span>{{ item.kind === 'FOLDER' ? '📁' : (isKnowledgeSourceSelected(item) ? '✅' : '📄') }} {{ item.name }}</span>
+                      <span class="source-name"><FileTypeIcon :item="item" :size="17" />{{ item.name }}</span>
                       <small>{{ item.path }}</small>
                       <em v-if="item.kind === 'FOLDER'">{{ item.childKnowledgeCount || 0 }} 个可用资料</em>
                       <em v-else>{{ item.knowledgeReady ? '可用于问答' : '仅文件名可用' }}</em>
@@ -1792,17 +1813,17 @@ onMounted(async () => {
             <div class="page-head"><div><span class="eyebrow">Album</span><h2>图片相册</h2></div><button class="soft" @click="loadFiles(null, true)">返回文件</button></div>
             <div class="gallery">
               <div v-if="!items.length" class="empty">还没有图片</div>
-              <div v-for="item in items" :key="item.id" class="photo-card" @click="previewFile(item)">
+              <button v-for="item in items" :key="item.id" type="button" class="photo-card" @click="previewFile(item)">
                 <img :src="`/api/files/${item.id}/download?disposition=inline&token=${token}`" :alt="item.name" />
                 <strong>{{ item.name }}</strong>
                 <small>{{ formatDate(item.createdAt) }} · {{ formatSize(item.sizeBytes) }}</small>
-              </div>
+              </button>
             </div>
           </section>
 
           <section v-else class="file-view-layout">
             <main class="file-main">
-              <div class="folder-head" v-if="!isRootFiles">
+              <div class="folder-head" v-if="viewMode === 'files' && !isRootFiles">
                 <nav class="breadcrumb">
                   <button class="crumb" @click="loadFiles(null, true)">全部文件</button>
                   <template v-if="viewMode === 'files'">
@@ -1811,7 +1832,7 @@ onMounted(async () => {
                   <span v-else>› {{ modeTitle }}</span>
                 </nav>
                 <div class="folder-title-row">
-                  <span class="big-folder-icon">📁</span>
+                  <span class="big-folder-icon" aria-hidden="true"><Folder :size="30" /></span>
                   <div><h2>{{ currentFolderName }}</h2><p>{{ items.length }} 项 · 双击文件打开，单击文件查看相似内容</p></div>
                 </div>
               </div>
@@ -1822,23 +1843,23 @@ onMounted(async () => {
                   <p>{{ items.length }} 个项目，已选 {{ selectedIds.length }} 项</p>
                 </div>
                 <div class="toolbar-actions">
-                  <button class="soft" :class="{ active: fileDisplayMode === 'list' }" @click="setFileDisplayMode('list')">☷</button>
-                  <button class="soft" :class="{ active: fileDisplayMode === 'grid' }" @click="setFileDisplayMode('grid')">▦</button>
-                  <button class="soft" :disabled="!selectedIds.length || viewMode === 'trash'" @click="openBatchTargetDialog('move')">批量移动</button>
-                  <button class="soft" :disabled="!selectedIds.length || viewMode === 'trash'" @click="openBatchTargetDialog('copy')">批量复制</button>
-                  <button class="danger" :disabled="!selectedIds.length || viewMode === 'trash'" @click="batchDeleteSelected">批量删除</button>
+                  <button class="soft view-toggle" :class="{ active: fileDisplayMode === 'list' }" aria-label="列表视图" title="列表视图" @click="setFileDisplayMode('list')"><List :size="18" /></button>
+                  <button class="soft view-toggle" :class="{ active: fileDisplayMode === 'grid' }" aria-label="网格视图" title="网格视图" @click="setFileDisplayMode('grid')"><LayoutGrid :size="18" /></button>
+                  <button v-if="viewMode !== 'trash'" class="soft" :disabled="!selectedIds.length" @click="openBatchTargetDialog('move')">批量移动</button>
+                  <button v-if="viewMode !== 'trash'" class="soft" :disabled="!selectedIds.length" @click="openBatchTargetDialog('copy')">批量复制</button>
+                  <button v-if="viewMode !== 'trash'" class="danger" :disabled="!selectedIds.length" @click="batchDeleteSelected">批量删除</button>
                 </div>
               </div>
 
-              <label v-if="items.length" class="select-all"><input type="checkbox" :checked="items.length > 0 && selectedIds.length === items.length" @change="toggleSelectAllVisible" /> 全选当前列表</label>
+              <label v-if="items.length && viewMode !== 'trash'" class="select-all"><input type="checkbox" :checked="items.length > 0 && selectedIds.length === items.length" @change="toggleSelectAllVisible" /> 全选当前列表</label>
 
               <div v-if="fileDisplayMode === 'list'" class="file-table">
                 <div class="file-row head"><span>文件名</span><span>摘要 / 标签</span><span>大小</span><span>修改时间</span><span>创建者</span><span></span></div>
                 <div v-if="!items.length" class="empty">当前没有内容</div>
                 <div v-for="item in items" :key="item.id" class="file-row" :class="{ focused: focusFile?.id === item.id }" @click="focusForRecommendation(item, $event)" @dblclick.stop="openItem(item)">
                   <span class="file-name-cell">
-                    <input type="checkbox" :checked="isSelected(item)" @click="toggleSelected(item, $event)" @dblclick.stop />
-                    <i :class="['file-icon', fileTypeClass(item)]">{{ previewIcon(item) }}</i>
+                    <input v-if="viewMode !== 'trash'" type="checkbox" :aria-label="`选择 ${item.name}`" :checked="isSelected(item)" @click="toggleSelected(item, $event)" @dblclick.stop />
+                    <FileTypeIcon :item="item" :class="['file-icon', fileTypeClass(item)]" />
                     <button v-if="item.kind === 'FOLDER' && viewMode === 'files'" class="link file-name-link" @click.stop="openFolder(item)">{{ item.name }}</button>
                     <b v-else :title="item.name">{{ item.name }}</b>
                   </span>
@@ -1871,8 +1892,8 @@ onMounted(async () => {
                 <article v-for="item in items" :key="item.id" class="file-card" :class="{ focused: focusFile?.id === item.id }" @click="focusForRecommendation(item, $event)" @dblclick.stop="openItem(item)">
                   <div class="thumb" :class="fileTypeClass(item)">
                     <img v-if="canShowImageThumb(item)" :src="`/api/files/${item.id}/download?disposition=inline&token=${token}`" :alt="item.name" />
-                    <span v-else>{{ previewIcon(item) }}</span>
-                    <input type="checkbox" :checked="isSelected(item)" @click="toggleSelected(item, $event)" @dblclick.stop />
+                    <FileTypeIcon v-else :item="item" :size="34" />
+                    <input v-if="viewMode !== 'trash'" type="checkbox" :aria-label="`选择 ${item.name}`" :checked="isSelected(item)" @click="toggleSelected(item, $event)" @dblclick.stop />
                   </div>
                   <div class="file-card-body">
                     <strong>{{ item.name }}</strong>
@@ -1902,7 +1923,7 @@ onMounted(async () => {
                 <p v-if="!focusFile" class="muted">单击一个文件后，将展示相似文件、虚拟分组和 AI 摘要入口。</p>
                 <template v-else>
                   <div class="focus-file">
-                    <i :class="['file-icon', fileTypeClass(focusFile)]">{{ previewIcon(focusFile) }}</i>
+                    <FileTypeIcon :item="focusFile" :class="['file-icon', fileTypeClass(focusFile)]" />
                     <div><b>{{ focusFile.name }}</b><small>{{ focusFile.summary || '暂无摘要' }}</small></div>
                   </div>
                   <p v-if="sideRecommendLoading" class="muted">正在生成推荐...</p>
@@ -1910,7 +1931,7 @@ onMounted(async () => {
                     <button class="group-title" @click="toggleRecommendGroup(group.name)"><span>{{ group.name }}</span><em>{{ group.files.length }} 个</em></button>
                     <div v-if="!isRecommendGroupClosed(group.name)">
                       <button v-for="r in group.files" :key="r.id" class="related-row" @click="previewRecommended(r)">
-                        <i :class="['file-icon', fileTypeClass(r)]">{{ previewIcon(r) }}</i>
+                        <FileTypeIcon :item="r" :class="['file-icon', fileTypeClass(r)]" />
                         <span><b>{{ r.name }}</b><small>{{ r.summary || '相似资料' }}</small></span>
                       </button>
                     </div>
@@ -1935,7 +1956,7 @@ onMounted(async () => {
                 <span>{{ kpi.label }}</span>
                 <b>{{ kpi.value }}</b>
                 <small>{{ kpi.trend }}</small>
-                <em>{{ kpi.icon }}</em>
+                <em><component :is="kpi.icon" :size="23" :stroke-width="1.8" /></em>
               </article>
             </div>
 
@@ -1995,10 +2016,10 @@ onMounted(async () => {
           <section v-else-if="adminTab === 'users'" class="admin-section">
             <div class="section-head"><div><span class="eyebrow">User Management</span><h2>用户管理</h2><p>添加用户、封禁账号、重置密码、修改权限等级和 GB 容量。</p></div><button class="soft" @click="loadAdminUsers">刷新</button></div>
             <div class="create-user-card">
-              <input v-model="adminCreateForm.username" placeholder="用户名" />
-              <input v-model="adminCreateForm.password" placeholder="初始密码" />
-              <select v-model="adminCreateForm.role"><option>USER</option><option>VIP</option><option>SVIP</option><option>ADMIN</option></select>
-              <input v-model.number="adminCreateForm.quotaGb" type="number" min="0.1" step="0.1" placeholder="容量 GB" />
+              <input v-model="adminCreateForm.username" aria-label="新用户用户名" placeholder="用户名" />
+              <input v-model="adminCreateForm.password" aria-label="新用户初始密码" placeholder="初始密码" />
+              <select v-model="adminCreateForm.role" aria-label="新用户权限等级"><option>USER</option><option>VIP</option><option>SVIP</option><option>ADMIN</option></select>
+              <input v-model.number="adminCreateForm.quotaGb" type="number" min="0.1" step="0.1" aria-label="新用户容量（GB）" placeholder="容量 GB" />
               <button @click="createAdminUser">添加用户</button>
             </div>
             <div class="admin-table user-admin-table">
@@ -2041,7 +2062,7 @@ onMounted(async () => {
                   <div class="file-row head"><span>文件</span><span>摘要 / 标签</span><span>状态</span><span>操作</span></div>
                   <div v-if="!auditItems.length" class="empty">该目录暂无文件。</div>
                   <div v-for="item in auditItems" :key="item.id" class="file-row audit-row" @dblclick.stop="item.kind === 'FOLDER' ? openAuditFolder(item) : previewFile(item, true)">
-                    <span class="file-name-cell"><i :class="['file-icon', fileTypeClass(item)]">{{ previewIcon(item) }}</i><button v-if="item.kind === 'FOLDER'" class="link" @click.stop="openAuditFolder(item)">{{ item.name }}</button><b v-else>{{ item.name }}</b></span>
+                    <span class="file-name-cell"><FileTypeIcon :item="item" :class="['file-icon', fileTypeClass(item)]" /><button v-if="item.kind === 'FOLDER'" class="link" @click.stop="openAuditFolder(item)">{{ item.name }}</button><b v-else>{{ item.name }}</b></span>
                     <span class="summary-tags"><small>{{ item.kind === 'FOLDER' ? folderReviewTip(item) : (item.summary || '暂无摘要') }}</small><em v-for="tag in tagList(item.tags)" :key="tag">{{ tag }}</em></span>
                     <span><mark :class="reviewClass(item.reviewStatus)">{{ reviewText(item.reviewStatus) }}</mark><small>{{ item.reviewNote || '' }}</small></span>
                     <span class="row-actions">
@@ -2109,10 +2130,10 @@ onMounted(async () => {
         </template>
 
         <div v-if="previewVisible && previewData" class="modal-mask" @click.self="previewVisible = false">
-          <section class="modal large">
+          <section class="modal large" role="dialog" aria-modal="true" aria-labelledby="preview-dialog-title">
             <header class="modal-head">
-              <div><h3>{{ adminPreviewMode ? '审查预览：' : '' }}{{ previewData.name }}</h3><p>{{ formatSize(previewData.sizeBytes) }} · {{ tagText(previewData.tags) }}<template v-if="adminPreviewMode"> · 状态：{{ reviewText(previewData.reviewStatus) }}</template></p></div>
-              <div class="actions"><button v-if="adminPreviewMode" class="soft" @click="downloadFile(previewData, true)">无法预览时下载</button><button class="soft" @click="previewVisible = false">关闭</button></div>
+              <div><h3 id="preview-dialog-title">{{ adminPreviewMode ? '审查预览：' : '' }}{{ previewData.name }}</h3><p>{{ formatSize(previewData.sizeBytes) }} · {{ tagText(previewData.tags) }}<template v-if="adminPreviewMode"> · 状态：{{ reviewText(previewData.reviewStatus) }}</template></p></div>
+              <div class="actions"><button v-if="adminPreviewMode" class="soft" @click="downloadFile(previewData, true)">无法预览时下载</button><button class="soft" aria-label="关闭预览" @click="previewVisible = false"><X :size="17" />关闭</button></div>
             </header>
             <p class="summary-box">{{ previewData.summary || '暂无摘要' }}</p>
             <div v-if="previewData.previewType === 'VIDEO' || previewData.previewType === 'AUDIO'" class="media-tools"><span>播放倍速</span><select v-model.number="playbackRate" @change="applyPlaybackRate"><option :value="0.5">0.5x</option><option :value="1">1x</option><option :value="1.25">1.25x</option><option :value="1.5">1.5x</option><option :value="2">2x</option></select></div>
@@ -2132,26 +2153,26 @@ onMounted(async () => {
         </div>
 
         <div v-if="adminEditDialog.visible" class="modal-mask" @click.self="adminEditDialog.visible = false">
-          <section class="modal">
-            <h3>修改权限等级与存储空间</h3>
+          <section class="modal" role="dialog" aria-modal="true" aria-labelledby="edit-user-dialog-title">
+            <h3 id="edit-user-dialog-title">修改权限等级与存储空间</h3>
             <p class="muted">用户：{{ adminEditDialog.user?.username }}。容量单位为 GB，支持小数，例如 0.5 表示 512MB。</p>
-            <label>权限等级</label><select v-model="adminEditDialog.role"><option>USER</option><option>VIP</option><option>SVIP</option><option>ADMIN</option></select>
-            <label>网盘总容量（GB）</label><input v-model.number="adminEditDialog.quotaGb" type="number" min="0.1" step="0.1" placeholder="例如 10" />
+            <label for="edit-user-role">权限等级</label><select id="edit-user-role" v-model="adminEditDialog.role"><option>USER</option><option>VIP</option><option>SVIP</option><option>ADMIN</option></select>
+            <label for="edit-user-quota">网盘总容量（GB）</label><input id="edit-user-quota" v-model.number="adminEditDialog.quotaGb" type="number" min="0.1" step="0.1" placeholder="例如 10" />
             <p class="tip">保存后，系统仍按“配额 + 配额 50% 临时缓冲”的规则判断上传。</p>
             <div class="actions right"><button class="soft" @click="adminEditDialog.visible = false">取消</button><button @click="confirmUpdateAdminUser">保存修改</button></div>
           </section>
         </div>
 
         <div v-if="targetDialog.visible" class="modal-mask" @click.self="targetDialog.visible = false">
-          <section class="modal">
-            <h3>{{ targetDialog.type === 'copy' ? '复制到' : '移动到' }}</h3>
+          <section class="modal" role="dialog" aria-modal="true" aria-labelledby="target-dialog-title">
+            <h3 id="target-dialog-title">{{ targetDialog.type === 'copy' ? '复制到' : '移动到' }}</h3>
             <p class="muted">目标：{{ targetDialog.items?.length > 1 ? `已选择 ${targetDialog.items.length} 个项目` : targetDialog.item?.name }}</p>
-            <select v-model="targetDialog.targetParentId"><option :value="null">根目录</option><option v-for="folder in targetDialog.folders" :key="folder.id" :value="folder.id">{{ folder.name }}（ID: {{ folder.id }}）</option></select>
+            <select v-model="targetDialog.targetParentId" aria-label="目标文件夹"><option :value="null">根目录</option><option v-for="folder in targetDialog.folders" :key="folder.id" :value="folder.id">{{ folder.name }}（ID: {{ folder.id }}）</option></select>
             <div class="actions right"><button class="soft" @click="targetDialog.visible = false">取消</button><button @click="confirmTargetAction">确定</button></div>
           </section>
         </div>
 
-        <div v-if="loading" class="loading">处理中...</div>
+        <div v-if="loading" class="loading" role="status" aria-live="polite"><LoaderCircle class="spin" :size="18" />处理中…</div>
       </section>
     </section>
   </main>
