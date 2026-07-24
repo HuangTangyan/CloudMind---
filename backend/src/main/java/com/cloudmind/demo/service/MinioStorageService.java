@@ -52,7 +52,7 @@ public class MinioStorageService {
                     .contentType(contentType == null ? "application/octet-stream" : contentType)
                     .build());
         } catch (Exception e) {
-            throw new IllegalStateException("上传到 MinIO 失败：" + e.getMessage(), e);
+            throw new IllegalStateException("上传到 MinIO 失败", e);
         }
     }
 
@@ -63,7 +63,7 @@ public class MinioStorageService {
                     .object(objectName)
                     .build());
         } catch (Exception e) {
-            throw new IllegalStateException("从 MinIO 读取失败：" + e.getMessage(), e);
+            throw new IllegalStateException("从 MinIO 读取失败", e);
         }
     }
 
@@ -82,7 +82,7 @@ public class MinioStorageService {
                             .build())
                     .build());
         } catch (Exception e) {
-            throw new IllegalStateException("复制 MinIO 文件失败：" + e.getMessage(), e);
+            throw new IllegalStateException("复制 MinIO 文件失败", e);
         }
     }
 
@@ -96,7 +96,7 @@ public class MinioStorageService {
         } catch (ErrorResponseException ignored) {
             // 对象已不存在时，不影响业务。
         } catch (Exception e) {
-            throw new IllegalStateException("删除 MinIO 文件失败：" + e.getMessage(), e);
+            throw new IllegalStateException("删除 MinIO 文件失败", e);
         }
     }
 }

@@ -2,6 +2,7 @@ package com.cloudmind.demo.config;
 
 import com.cloudmind.demo.service.AuthService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,6 +18,8 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Configuration
@@ -61,15 +64,16 @@ public class SecurityConfig {
                         .anyRequest().permitAll())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) ->
-                                writeSecurityError(response, objectMapper, 401, "请先登录或重新登录"))
+                                writeSecurityError(request, response, objectMapper, 401, "请先登录或重新登录"))
                         .accessDeniedHandler((request, response, exception) ->
-                                writeSecurityError(response, objectMapper, 403, "没有访问该资源的权限")))
+                                writeSecurityError(request, response, objectMapper, 403, "没有访问该资源的权限")))
                 .addFilterBefore(bearerTokenHeaderFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(apiRateLimitFilter, BearerTokenHeaderFilter.class);
         return http.build();
     }
 
     private static void writeSecurityError(
+            HttpServletRequest request,
             HttpServletResponse response,
             ObjectMapper objectMapper,
             int status,
@@ -78,9 +82,15 @@ public class SecurityConfig {
         response.setStatus(status);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", false);
+        body.put("status", status);
+        body.put("message", message);
+        body.put("requestId", RequestIdFilter.current(request));
+        body.put("timestamp", Instant.now().toString());
         objectMapper.writeValue(
                 response.getOutputStream(),
-                Map.of("success", false, "message", message)
+                body
         );
     }
 }

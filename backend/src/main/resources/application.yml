@@ -35,10 +35,14 @@ cloudmind:
   ai:
     api-key: ${CLOUDMIND_AI_API_KEY:}
     require-environment-key: false
+    config-encryption-key: ${CLOUDMIND_AI_CONFIG_ENCRYPTION_KEY:}
+    allowed-hosts: ${CLOUDMIND_AI_ALLOWED_HOSTS:api.deepseek.com,api.openai.com}
   auth:
     access-token-ttl: ${ACCESS_TOKEN_TTL:PT30M}
     refresh-token-ttl: ${REFRESH_TOKEN_TTL:P7D}
     cleanup-interval-ms: ${TOKEN_CLEANUP_INTERVAL_MS:3600000}
+    max-login-failures: ${MAX_LOGIN_FAILURES:5}
+    login-lock-duration: ${LOGIN_LOCK_DURATION:PT15M}
   rate-limit:
     enabled: ${RATE_LIMIT_ENABLED:true}
     login-per-minute: ${RATE_LIMIT_LOGIN_PER_MINUTE:5}

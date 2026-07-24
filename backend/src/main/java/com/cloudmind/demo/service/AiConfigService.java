@@ -8,6 +8,8 @@ import com.cloudmind.demo.repository.CloudFileRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,9 +22,12 @@ import java.util.*;
 
 @Service
 public class AiConfigService {
+    private static final Logger log = LoggerFactory.getLogger(AiConfigService.class);
     private final AiConfigRepository configRepository;
     private final CloudFileRepository fileRepository;
     private final ObjectMapper objectMapper;
+    private final AiEndpointSecurityService endpointSecurityService;
+    private final SecretEncryptionService secretEncryptionService;
     @Value("${cloudmind.ai.api-key:}")
     private String environmentApiKey;
     @Value("${cloudmind.ai.require-environment-key:false}")
@@ -33,10 +38,14 @@ public class AiConfigService {
 
     public AiConfigService(AiConfigRepository configRepository,
                            CloudFileRepository fileRepository,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           AiEndpointSecurityService endpointSecurityService,
+                           SecretEncryptionService secretEncryptionService) {
         this.configRepository = configRepository;
         this.fileRepository = fileRepository;
         this.objectMapper = objectMapper;
+        this.endpointSecurityService = endpointSecurityService;
+        this.secretEncryptionService = secretEncryptionService;
     }
 
     public AiConfig getOrCreate() {
@@ -48,6 +57,13 @@ public class AiConfigService {
         });
         if (requireEnvironmentKey && config.getApiKey() != null && !config.getApiKey().isBlank()) {
             config.setApiKey(null);
+            config = configRepository.save(config);
+        } else if (!requireEnvironmentKey
+                && config.getApiKey() != null
+                && !config.getApiKey().isBlank()
+                && !secretEncryptionService.isEncrypted(config.getApiKey())
+                && secretEncryptionService.isConfigured()) {
+            config.setApiKey(secretEncryptionService.encrypt(config.getApiKey()));
             config = configRepository.save(config);
         }
         return config;
@@ -61,8 +77,9 @@ public class AiConfigService {
         map.put("baseUrl", config.getBaseUrl());
         map.put("model", config.getModel());
         map.put("apiKey", "");
-        map.put("hasApiKey", !effectiveApiKey(config).isBlank());
+        map.put("hasApiKey", hasUsableApiKey(config));
         map.put("apiKeyManagedExternally", requireEnvironmentKey || !environmentApiKey.isBlank());
+        map.put("apiKeyEncryptionReady", secretEncryptionService.isConfigured());
         map.put("reviewPrompt", config.getReviewPrompt() == null || config.getReviewPrompt().isBlank() ? defaultReviewPrompt() : config.getReviewPrompt());
         map.put("updatedAt", config.getUpdatedAt());
         return map;
@@ -73,7 +90,12 @@ public class AiConfigService {
         AiConfig config = getOrCreate();
         if (body.containsKey("enabled")) config.setEnabled(Boolean.parseBoolean(String.valueOf(body.get("enabled"))));
         if (body.containsKey("provider")) config.setProvider(clean(String.valueOf(body.get("provider")), "DeepSeek / OpenAI 兼容"));
-        if (body.containsKey("baseUrl")) config.setBaseUrl(clean(String.valueOf(body.get("baseUrl")), "https://api.deepseek.com/v1"));
+        if (body.containsKey("baseUrl")) {
+            URI validatedBaseUrl = endpointSecurityService.validateBaseUrl(
+                    clean(String.valueOf(body.get("baseUrl")), "https://api.deepseek.com/v1")
+            );
+            config.setBaseUrl(validatedBaseUrl.toString());
+        }
         if (body.containsKey("model")) config.setModel(clean(String.valueOf(body.get("model")), "deepseek-chat"));
         if (body.containsKey("reviewPrompt")) config.setReviewPrompt(clean(String.valueOf(body.get("reviewPrompt")), defaultReviewPrompt()));
         if (body.containsKey("apiKey")) {
@@ -82,7 +104,7 @@ public class AiConfigService {
                 if (requireEnvironmentKey) {
                     throw new IllegalArgumentException("生产环境的 AI API Key 只能通过 CLOUDMIND_AI_API_KEY 注入");
                 }
-                config.setApiKey(key);
+                config.setApiKey(secretEncryptionService.encrypt(key));
             }
         }
         configRepository.save(config);
@@ -102,7 +124,8 @@ public class AiConfigService {
             String content = callChat(config, apiKey, "只回复：连接成功", "这是 CloudMind 管理后台连接测试。", 600);
             return Map.of("ok", true, "message", content == null || content.isBlank() ? "AI 接口已返回响应。" : content);
         } catch (Exception e) {
-            return Map.of("ok", false, "message", "连接失败：" + e.getMessage());
+            log.warn("AI connection test failed for configured provider", e);
+            return Map.of("ok", false, "message", "连接失败，请检查可信域名、API Key 和网络配置");
         }
     }
 
@@ -196,7 +219,8 @@ public class AiConfigService {
             if (note.isBlank()) note = "AI审查：" + Optional.ofNullable(aiResponse).orElse("无返回");
             return new ReviewResult(status, trimTo(note, 480), normalizeTags(tags), summary);
         } catch (Exception e) {
-            return new ReviewResult("PENDING", trimTo("AI接口调用失败，等待人工审查：" + e.getMessage(), 480), null, null);
+            log.warn("AI review failed for fileId={}", file.getId(), e);
+            return new ReviewResult("PENDING", "AI 接口暂时不可用，文件已转为等待人工审查", null, null);
         }
     }
 
@@ -222,9 +246,11 @@ public class AiConfigService {
     }
 
     private String callChat(AiConfig config, String apiKey, String systemPrompt, String userContent, int maxTokens) throws Exception {
-        String base = config.getBaseUrl() == null ? "" : config.getBaseUrl().trim();
+        URI validatedBase = endpointSecurityService.validateBaseUrl(config.getBaseUrl());
+        String base = validatedBase.toString();
         if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
         String url = base.endsWith("/chat/completions") ? base : base + "/chat/completions";
+        URI requestUri = endpointSecurityService.validateRequestUri(URI.create(url));
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", config.getModel());
@@ -237,7 +263,7 @@ public class AiConfigService {
         String json = objectMapper.writeValueAsString(payload);
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
+                .uri(requestUri)
                 .timeout(Duration.ofSeconds(30))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + apiKey)
@@ -245,7 +271,7 @@ public class AiConfigService {
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IllegalStateException("HTTP " + response.statusCode() + "：" + trimTo(response.body(), 240));
+            throw new IllegalStateException("AI 服务返回非成功状态：" + response.statusCode());
         }
         JsonNode root = objectMapper.readTree(response.body());
         JsonNode content = root.path("choices").path(0).path("message").path("content");
@@ -299,7 +325,17 @@ public class AiConfigService {
         String environmentValue = environmentApiKey == null ? "" : environmentApiKey.trim();
         if (!environmentValue.isBlank()) return environmentValue;
         if (requireEnvironmentKey) return "";
-        return config.getApiKey() == null ? "" : config.getApiKey().trim();
+        String stored = config.getApiKey() == null ? "" : config.getApiKey().trim();
+        if (stored.isBlank() || !secretEncryptionService.isEncrypted(stored)) return "";
+        return secretEncryptionService.decrypt(stored);
+    }
+
+    private boolean hasUsableApiKey(AiConfig config) {
+        String environmentValue = environmentApiKey == null ? "" : environmentApiKey.trim();
+        if (!environmentValue.isBlank()) return true;
+        if (requireEnvironmentKey) return false;
+        return secretEncryptionService.isConfigured()
+                && secretEncryptionService.isEncrypted(config.getApiKey());
     }
 
     private String clean(String value, String fallback) {

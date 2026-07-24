@@ -1,6 +1,6 @@
 services:
   mysql:
-    image: mysql:8.0
+    image: mysql:8.0.46
     container_name: cloudmind-mysql
     restart: unless-stopped
     environment:
@@ -24,7 +24,7 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    image: ${MINIO_IMAGE:?MINIO_IMAGE must be a reviewed, immutable MinIO-compatible image tag}
     container_name: cloudmind-minio
     restart: unless-stopped
     environment:

@@ -108,6 +108,7 @@ http://localhost:5173
 ```bash
 mysql -u <管理员> -p <数据库名> < backend/deploy/001-security-batch1.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/002-auth-token-security.sql
+mysql -u <管理员> -p <数据库名> < backend/deploy/003-security-batch3.sql
 ```
 
 第二批安全加固启用了 Spring Security 统一鉴权、30 分钟访问令牌、
@@ -127,3 +128,18 @@ mysql -u <管理员> -p <数据库名> < backend/deploy/002-auth-token-security.
 docker compose down -v
 docker compose up -d mysql minio
 ```
+
+## 第三批上线安全配置
+
+- `MINIO_IMAGE` 必须填写经过评审的不可变镜像标签，不允许使用
+  `latest`。MinIO 社区仓库在 2026 年已经归档，上线前应确认对象存储
+  镜像的维护来源、许可证、安全更新和迁移方案。
+- AI Base URL 仅允许 HTTPS，并且域名必须列入
+  `CLOUDMIND_AI_ALLOWED_HOSTS`。
+- 生产环境继续通过 `CLOUDMIND_AI_API_KEY` 注入密钥。开发环境如果需要
+  从管理后台保存 Key，还必须设置 Base64 编码的 32 字节
+  `CLOUDMIND_AI_CONFIG_ENCRYPTION_KEY`，数据库只保存 AES-GCM 密文。
+- 同一账号连续登录失败 5 次默认锁定 15 分钟，可通过
+  `MAX_LOGIN_FAILURES` 和 `LOGIN_LOCK_DURATION` 调整。
+- 每个错误响应都会返回 `X-Request-Id` 和 `requestId`，排查问题时只需
+  提供该编号，不应把完整 Token、密码或 API Key 写入日志。

@@ -27,17 +27,20 @@ public class FileService {
     private final MinioStorageService storageService;
     private final TextAnalyzeService textAnalyzeService;
     private final UploadSecurityService uploadSecurityService;
+    private final FileNameSecurityService fileNameSecurityService;
 
     public FileService(CloudFileRepository fileRepository,
                        FileVersionRepository versionRepository,
                        MinioStorageService storageService,
                        TextAnalyzeService textAnalyzeService,
-                       UploadSecurityService uploadSecurityService) {
+                       UploadSecurityService uploadSecurityService,
+                       FileNameSecurityService fileNameSecurityService) {
         this.fileRepository = fileRepository;
         this.versionRepository = versionRepository;
         this.storageService = storageService;
         this.textAnalyzeService = textAnalyzeService;
         this.uploadSecurityService = uploadSecurityService;
+        this.fileNameSecurityService = fileNameSecurityService;
     }
 
     public Map<String, Object> list(AppUser user, Long parentId) {
@@ -615,11 +618,7 @@ public class FileService {
     }
 
     private String cleanName(String rawName) {
-        if (rawName == null) throw new IllegalArgumentException("名称不能为空");
-        String name = rawName.trim().replace("\\", "_").replace("/", "_");
-        if (name.isBlank()) throw new IllegalArgumentException("名称不能为空");
-        if (name.length() > 180) throw new IllegalArgumentException("名称不能超过 180 个字符");
-        return name;
+        return fileNameSecurityService.sanitize(rawName);
     }
 
     private String newObjectName(AppUser user, String name) {

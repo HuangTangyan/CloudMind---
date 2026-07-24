@@ -15,6 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -66,24 +67,26 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         }
 
         long now = clock.millis();
-        String key = policy.name() + ":" + clientKey(request);
-        WindowState state = windows.compute(key, (ignored, old) -> {
-            if (old == null || now - old.windowStartedAt() >= policy.windowMillis()) {
-                return new WindowState(now, 1);
+        long retryAfterSeconds = 0L;
+        for (String clientKey : clientKeys(request, policy)) {
+            WindowState state = consume(policy.name() + ":" + clientKey, policy, now);
+            if (state.count() > policy.limit()) {
+                retryAfterSeconds = Math.max(
+                        retryAfterSeconds,
+                        Math.max(
+                                1L,
+                                (policy.windowMillis() - (now - state.windowStartedAt()) + 999L) / 1000L
+                        )
+                );
             }
-            return new WindowState(old.windowStartedAt(), old.count() + 1);
-        });
+        }
 
         if (windows.size() > 10_000) {
             windows.entrySet().removeIf(entry ->
                     now - entry.getValue().windowStartedAt() > 3_600_000L);
         }
 
-        if (state.count() > policy.limit()) {
-            long retryAfterSeconds = Math.max(
-                    1L,
-                    (policy.windowMillis() - (now - state.windowStartedAt()) + 999L) / 1000L
-            );
+        if (retryAfterSeconds > 0L) {
             response.setStatus(429);
             response.setHeader("Retry-After", String.valueOf(retryAfterSeconds));
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
@@ -98,35 +101,52 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    private WindowState consume(String key, Policy policy, long now) {
+        return windows.compute(key, (ignored, old) -> {
+            if (old == null || now - old.windowStartedAt() >= policy.windowMillis()) {
+                return new WindowState(now, 1);
+            }
+            return new WindowState(old.windowStartedAt(), old.count() + 1);
+        });
+    }
+
     private Policy resolvePolicy(HttpServletRequest request) {
         if (!"POST".equalsIgnoreCase(request.getMethod())) return null;
         String path = request.getRequestURI();
         if ("/api/auth/login".equals(path)) {
-            return new Policy("login", positive(loginPerMinute), 60_000L);
+            return new Policy("login", positive(loginPerMinute), 60_000L, false);
         }
         if ("/api/auth/register".equals(path)) {
-            return new Policy("register", positive(registerPerHour), 3_600_000L);
+            return new Policy("register", positive(registerPerHour), 3_600_000L, false);
         }
         if ("/api/auth/refresh".equals(path)) {
-            return new Policy("refresh", positive(refreshPerMinute), 60_000L);
+            return new Policy("refresh", positive(refreshPerMinute), 60_000L, false);
         }
         if ("/api/auth/change-password".equals(path)) {
-            return new Policy("password-change", positive(passwordChangePer15Minutes), 900_000L);
+            return new Policy("password-change", positive(passwordChangePer15Minutes), 900_000L, true);
         }
         if (path.startsWith("/api/files/upload")) {
-            return new Policy("upload", positive(uploadPerMinute), 60_000L);
+            return new Policy("upload", positive(uploadPerMinute), 60_000L, true);
         }
         if ("/api/knowledge/ask".equals(path) || "/api/knowledge/overview".equals(path)) {
-            return new Policy("ai", positive(aiPerMinute), 60_000L);
+            return new Policy("ai", positive(aiPerMinute), 60_000L, true);
         }
         return null;
     }
 
-    private String clientKey(HttpServletRequest request) {
+    private List<String> clientKeys(HttpServletRequest request, Policy policy) {
+        String addressKey = "ip-" + remoteAddress(request);
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication != null && authentication.getPrincipal() instanceof AppUser user) {
-            return "user-" + user.getId();
+            String userKey = "user-" + user.getId();
+            return policy.dualDimension()
+                    ? List.of(userKey, addressKey)
+                    : List.of(userKey);
         }
+        return List.of(addressKey);
+    }
+
+    private String remoteAddress(HttpServletRequest request) {
         String remoteAddress = request.getRemoteAddr();
         if (remoteAddress == null || remoteAddress.isBlank()) return "unknown";
         return remoteAddress.length() > 80 ? remoteAddress.substring(0, 80) : remoteAddress;
@@ -136,6 +156,6 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         return Math.max(1, value);
     }
 
-    private record Policy(String name, int limit, long windowMillis) {}
+    private record Policy(String name, int limit, long windowMillis, boolean dualDimension) {}
     private record WindowState(long windowStartedAt, int count) {}
 }

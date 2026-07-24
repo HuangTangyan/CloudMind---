@@ -16,6 +16,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
@@ -175,6 +176,38 @@ class AuthServiceTest {
 
         assertThrows(SecurityException.class, () -> authService.requireSessionUser(accessToken));
         assertThrows(SecurityException.class, () -> authService.refreshSession(refreshToken));
+    }
+
+    @Test
+    void locksAccountAfterRepeatedPasswordFailures() {
+        AppUser user = user(8L, "locked_user", "USER");
+        user.setPasswordHash(passwordEncoder.encode("correct-password"));
+        user.setSalt("");
+        user.setPasswordChangedAt(Instant.now());
+        when(userRepository.findByUsername("locked_user")).thenReturn(Optional.of(user));
+        ReflectionTestUtils.setField(authService, "maxLoginFailures", 3);
+        ReflectionTestUtils.setField(authService, "loginLockDuration", Duration.ofMinutes(15));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> authService.login("locked_user", "wrong-password")
+        );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> authService.login("locked_user", "wrong-password")
+        );
+        assertThrows(
+                LoginLockedException.class,
+                () -> authService.login("locked_user", "wrong-password")
+        );
+
+        assertEquals(3, user.getFailedLoginAttempts());
+        assertNotNull(user.getLockedUntil());
+        assertTrue(user.getLockedUntil().isAfter(Instant.now()));
+        assertThrows(
+                LoginLockedException.class,
+                () -> authService.login("locked_user", "correct-password")
+        );
     }
 
     private int revokeTokensByUser(Long userId, Instant revokedAt) {

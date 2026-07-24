@@ -83,7 +83,7 @@ public class KnowledgeQaService {
                 usedAi = true;
             } catch (Exception e) {
                 answer = localAnswer(question, ranked, scope, questionTerms)
-                        + "\n\n提示：AI 接口调用失败，已切换为本地知识库摘录回答。原因：" + trimTo(e.getMessage(), 160);
+                        + "\n\n提示：AI 接口调用失败，已安全切换为本地知识库摘录回答。";
             }
         } else {
             answer = localAnswer(question, ranked, scope, questionTerms)
@@ -137,7 +137,7 @@ public class KnowledgeQaService {
                 usedAi = true;
             } catch (Exception e) {
                 answer = localOverview(scope, selected)
-                        + "\n\n提示：AI 接口调用失败，已切换为本地概述。原因：" + trimTo(e.getMessage(), 160);
+                        + "\n\n提示：AI 接口调用失败，已安全切换为本地概述。";
             }
         } else {
             answer = localOverview(scope, selected)

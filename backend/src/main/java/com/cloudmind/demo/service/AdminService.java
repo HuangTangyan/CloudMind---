@@ -145,7 +145,7 @@ public class AdminService {
         } catch (IOException e) {
             Map<String, Object> fallback = new LinkedHashMap<>();
             fallback.put("name", "未知磁盘");
-            fallback.put("description", e.getMessage());
+            fallback.put("description", "暂时无法读取服务器磁盘信息");
             fallback.put("path", appPath.toString());
             fallback.put("totalBytes", 0L);
             fallback.put("usedBytes", 0L);

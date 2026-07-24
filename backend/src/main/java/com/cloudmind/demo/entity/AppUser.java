@@ -33,10 +33,16 @@ public class AppUser {
 
     private Instant passwordChangedAt;
 
+    @Column(nullable = false)
+    private Integer failedLoginAttempts = 0;
+
+    private Instant lockedUntil;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) createdAt = Instant.now();
         if (enabled == null) enabled = true;
+        if (failedLoginAttempts == null) failedLoginAttempts = 0;
         if (role == null) role = "USER";
         if (quotaBytes == null) quotaBytes = 10L * 1024 * 1024 * 1024;
     }
@@ -59,4 +65,8 @@ public class AppUser {
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getPasswordChangedAt() { return passwordChangedAt; }
     public void setPasswordChangedAt(Instant passwordChangedAt) { this.passwordChangedAt = passwordChangedAt; }
+    public Integer getFailedLoginAttempts() { return failedLoginAttempts; }
+    public void setFailedLoginAttempts(Integer failedLoginAttempts) { this.failedLoginAttempts = failedLoginAttempts; }
+    public Instant getLockedUntil() { return lockedUntil; }
+    public void setLockedUntil(Instant lockedUntil) { this.lockedUntil = lockedUntil; }
 }

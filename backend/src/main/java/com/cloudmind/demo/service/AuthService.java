@@ -37,6 +37,12 @@ public class AuthService {
     @Value("${cloudmind.auth.refresh-token-ttl:P7D}")
     private Duration refreshTokenTtl = Duration.ofDays(7);
 
+    @Value("${cloudmind.auth.max-login-failures:5}")
+    private int maxLoginFailures = 5;
+
+    @Value("${cloudmind.auth.login-lock-duration:PT15M}")
+    private Duration loginLockDuration = Duration.ofMinutes(15);
+
     public AuthService(
             AppUserRepository userRepository,
             AuthTokenRepository authTokenRepository,
@@ -62,22 +68,41 @@ public class AuthService {
         return userRepository.save(user);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = {IllegalArgumentException.class, LoginLockedException.class})
     public Map<String, Object> login(String username, String password) {
         username = normalizeUsername(username);
         AppUser user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("用户名或密码错误"));
+        Instant now = Instant.now();
+        if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(now)) {
+            throw locked(user.getLockedUntil(), now);
+        }
+        if (user.getLockedUntil() != null) {
+            user.setLockedUntil(null);
+            user.setFailedLoginAttempts(0);
+        }
         if (!Boolean.TRUE.equals(user.getEnabled())) {
             throw new IllegalArgumentException("账号已被禁用");
         }
         if (!passwordMatches(user, password)) {
+            int failedAttempts = safeFailedAttempts(user) + 1;
+            user.setFailedLoginAttempts(failedAttempts);
+            if (failedAttempts >= Math.max(1, maxLoginFailures)) {
+                Instant lockedUntil = now.plus(loginLockDuration);
+                user.setLockedUntil(lockedUntil);
+                userRepository.save(user);
+                throw locked(lockedUntil, now);
+            }
+            userRepository.save(user);
             throw new IllegalArgumentException("用户名或密码错误");
         }
+        user.setFailedLoginAttempts(0);
+        user.setLockedUntil(null);
         if (isLegacyHash(user.getPasswordHash())) {
             user.setPasswordHash(passwordEncoder.encode(password));
             user.setSalt("");
-            userRepository.save(user);
         }
+        userRepository.save(user);
         return issueSession(user, UUID.randomUUID().toString());
     }
 
@@ -250,6 +275,8 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(password));
         user.setSalt("");
         user.setPasswordChangedAt(userSelectedPassword ? Instant.now() : null);
+        user.setFailedLoginAttempts(0);
+        user.setLockedUntil(null);
     }
 
     private boolean passwordMatches(AppUser user, String password) {
@@ -295,6 +322,20 @@ public class AuthService {
 
     private void revokeTokens(Long userId) {
         authTokenRepository.revokeUserTokens(userId, Instant.now());
+    }
+
+    private int safeFailedAttempts(AppUser user) {
+        return user.getFailedLoginAttempts() == null
+                ? 0
+                : Math.max(0, user.getFailedLoginAttempts());
+    }
+
+    private LoginLockedException locked(Instant lockedUntil, Instant now) {
+        long retryAfterSeconds = Math.max(
+                1L,
+                Duration.between(now, lockedUntil).toSeconds()
+        );
+        return new LoginLockedException("登录失败次数过多，请稍后再试", retryAfterSeconds);
     }
 
     @Transactional
