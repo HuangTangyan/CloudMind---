@@ -78,6 +78,7 @@ public class AdminService {
         AppUser user = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         if (admin.getId().equals(user.getId())) throw new IllegalArgumentException("不能删除当前登录的管理员账号");
         fileService.adminPurgeAllFilesOfUser(user.getId());
+        authService.deleteTokensForUser(user.getId());
         userRepository.delete(user);
     }
 

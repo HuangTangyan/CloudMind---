@@ -2,6 +2,8 @@ package com.cloudmind.demo.controller;
 
 import com.cloudmind.demo.dto.ChangePasswordRequest;
 import com.cloudmind.demo.dto.LoginRequest;
+import com.cloudmind.demo.dto.LogoutRequest;
+import com.cloudmind.demo.dto.RefreshTokenRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.service.AuthService;
 import jakarta.validation.Valid;
@@ -28,6 +30,24 @@ public class AuthController {
     @PostMapping("/login")
     public Map<String, Object> login(@Valid @RequestBody LoginRequest request) {
         return Map.of("success", true, "message", "登录成功", "data", authService.login(request.getUsername(), request.getPassword()));
+    }
+
+    @PostMapping("/refresh")
+    public Map<String, Object> refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return Map.of(
+                "success", true,
+                "message", "登录状态已刷新",
+                "data", authService.refreshSession(request.getRefreshToken())
+        );
+    }
+
+    @PostMapping("/logout")
+    public Map<String, Object> logout(
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @Valid @RequestBody(required = false) LogoutRequest request
+    ) {
+        authService.logout(token, request == null ? null : request.getRefreshToken());
+        return Map.of("success", true, "message", "已安全退出");
     }
 
     @GetMapping("/me")

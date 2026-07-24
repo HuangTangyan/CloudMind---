@@ -103,13 +103,22 @@ http://localhost:5173
 `SPRING_PROFILES_ACTIVE=prod`，并由部署平台注入数据库、MinIO 和
 `CLOUDMIND_AI_API_KEY` 等敏感信息。
 
-已有数据库在首次使用生产配置前，执行一次：
+已有数据库在首次使用生产配置前，按顺序执行：
 
 ```bash
 mysql -u <管理员> -p <数据库名> < backend/deploy/001-security-batch1.sql
+mysql -u <管理员> -p <数据库名> < backend/deploy/002-auth-token-security.sql
 ```
 
-开发配置的 `ddl-auto=update` 会自动补充该字段；生产配置使用
+第二批安全加固启用了 Spring Security 统一鉴权、30 分钟访问令牌、
+7 天刷新令牌轮换、服务端注销与令牌清理。浏览器只在当前标签会话中
+保存令牌，关闭标签页后不会继续保留登录凭据。
+
+上传文件必须同时通过扩展名白名单和服务端实际内容类型检测；默认单文件
+上限为 100MB。登录、注册、刷新令牌、改密、上传和 AI 问答接口均有限流，
+可通过 `.env.example` 中的参数调整。
+
+开发配置的 `ddl-auto=update` 会自动补充所需表结构；生产配置使用
 `ddl-auto=validate`，不会静默修改数据库结构。
 
 如果旧数据库表结构和新版字段冲突，可以清空开发环境数据卷：

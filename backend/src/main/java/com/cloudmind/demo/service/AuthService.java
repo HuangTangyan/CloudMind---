@@ -1,8 +1,11 @@
 package com.cloudmind.demo.service;
 
+import com.cloudmind.demo.entity.AuthToken;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.repository.AppUserRepository;
+import com.cloudmind.demo.repository.AuthTokenRepository;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,25 +13,37 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class AuthService {
     private final AppUserRepository userRepository;
+    private final AuthTokenRepository authTokenRepository;
     private final PasswordEncoder passwordEncoder;
-    private final Map<String, Long> tokenStore = new ConcurrentHashMap<>();
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Value("${cloudmind.demo.default-quota-bytes:10737418240}")
     private long defaultQuotaBytes;
 
-    public AuthService(AppUserRepository userRepository, PasswordEncoder passwordEncoder) {
+    @Value("${cloudmind.auth.access-token-ttl:PT30M}")
+    private Duration accessTokenTtl = Duration.ofMinutes(30);
+
+    @Value("${cloudmind.auth.refresh-token-ttl:P7D}")
+    private Duration refreshTokenTtl = Duration.ofDays(7);
+
+    public AuthService(
+            AppUserRepository userRepository,
+            AuthTokenRepository authTokenRepository,
+            PasswordEncoder passwordEncoder
+    ) {
         this.userRepository = userRepository;
+        this.authTokenRepository = authTokenRepository;
         this.passwordEncoder = passwordEncoder;
     }
 
@@ -63,8 +78,7 @@ public class AuthService {
             user.setSalt("");
             userRepository.save(user);
         }
-        String token = issueToken(user);
-        return Map.of("token", token, "user", toUserMap(user));
+        return issueSession(user, UUID.randomUUID().toString());
     }
 
     public AppUser requireUser(String token) {
@@ -75,20 +89,49 @@ public class AuthService {
         return user;
     }
 
+    @Transactional(readOnly = true)
     public AppUser requireSessionUser(String token) {
         if (token == null || token.isBlank()) {
             throw new SecurityException("请先登录");
         }
-        Long userId = tokenStore.get(token);
-        if (userId == null) {
-            throw new SecurityException("登录状态已失效，请重新登录");
-        }
-        AppUser user = userRepository.findById(userId)
-                .orElseThrow(() -> new SecurityException("用户不存在"));
+        AuthToken storedToken = authTokenRepository
+                .findByTokenHashAndTokenType(hashToken(token), AuthToken.ACCESS)
+                .orElseThrow(() -> new SecurityException("登录状态已失效，请重新登录"));
+        validateActiveToken(storedToken, "登录状态已过期，请重新登录");
+        AppUser user = storedToken.getUser();
         if (!Boolean.TRUE.equals(user.getEnabled())) {
             throw new SecurityException("账号已被禁用");
         }
         return user;
+    }
+
+    @Transactional(noRollbackFor = SecurityException.class)
+    public Map<String, Object> refreshSession(String refreshToken) {
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw new SecurityException("刷新令牌不能为空");
+        }
+        AuthToken storedToken = authTokenRepository
+                .findByTokenHashAndTokenType(hashToken(refreshToken), AuthToken.REFRESH)
+                .orElseThrow(() -> new SecurityException("刷新令牌无效，请重新登录"));
+        if (storedToken.getRevokedAt() != null) {
+            authTokenRepository.revokeFamily(storedToken.getFamilyId(), Instant.now());
+            throw new SecurityException("刷新令牌已失效，请重新登录");
+        }
+        validateActiveToken(storedToken, "登录状态已过期，请重新登录");
+        AppUser user = storedToken.getUser();
+        if (!Boolean.TRUE.equals(user.getEnabled())) {
+            authTokenRepository.revokeFamily(storedToken.getFamilyId(), Instant.now());
+            throw new SecurityException("账号已被禁用");
+        }
+        authTokenRepository.revokeFamily(storedToken.getFamilyId(), Instant.now());
+        return issueSession(user, storedToken.getFamilyId());
+    }
+
+    @Transactional
+    public void logout(String accessToken, String refreshToken) {
+        Optional<AuthToken> stored = findAnyToken(accessToken, AuthToken.ACCESS)
+                .or(() -> findAnyToken(refreshToken, AuthToken.REFRESH));
+        stored.ifPresent(token -> authTokenRepository.revokeFamily(token.getFamilyId(), Instant.now()));
     }
 
     public AppUser requireAdmin(String token) {
@@ -156,8 +199,7 @@ public class AuthService {
         setPassword(user, newPassword, true);
         userRepository.save(user);
         revokeTokens(user.getId());
-        String newToken = issueToken(user);
-        return Map.of("token", newToken, "user", toUserMap(user));
+        return issueSession(user, UUID.randomUUID().toString());
     }
 
     @Transactional
@@ -188,6 +230,7 @@ public class AuthService {
         AppUser user = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         if (admin.getId().equals(user.getId())) throw new IllegalArgumentException("不能封禁/解封当前登录的管理员账号");
         user.setEnabled(enabled);
+        if (!enabled) revokeTokens(user.getId());
         return userRepository.save(user);
     }
 
@@ -221,15 +264,100 @@ public class AuthService {
         return encoded != null && !encoded.startsWith("$2");
     }
 
-    private String issueToken(AppUser user) {
-        String token = Base64.getUrlEncoder().withoutPadding()
-                .encodeToString((user.getId() + ":" + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8));
-        tokenStore.put(token, user.getId());
-        return token;
+    private Map<String, Object> issueSession(AppUser user, String familyId) {
+        Instant now = Instant.now();
+        String accessToken = randomToken(32);
+        String refreshToken = randomToken(48);
+        authTokenRepository.save(newToken(
+                user,
+                accessToken,
+                AuthToken.ACCESS,
+                familyId,
+                now.plus(accessTokenTtl)
+        ));
+        authTokenRepository.save(newToken(
+                user,
+                refreshToken,
+                AuthToken.REFRESH,
+                familyId,
+                now.plus(refreshTokenTtl)
+        ));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("token", accessToken);
+        result.put("accessToken", accessToken);
+        result.put("refreshToken", refreshToken);
+        result.put("expiresInSeconds", accessTokenTtl.toSeconds());
+        result.put("refreshExpiresInSeconds", refreshTokenTtl.toSeconds());
+        result.put("user", toUserMap(user));
+        return result;
     }
 
     private void revokeTokens(Long userId) {
-        tokenStore.entrySet().removeIf(entry -> entry.getValue().equals(userId));
+        authTokenRepository.revokeUserTokens(userId, Instant.now());
+    }
+
+    @Transactional
+    public void deleteTokensForUser(Long userId) {
+        authTokenRepository.deleteByUserId(userId);
+    }
+
+    @Scheduled(fixedDelayString = "${cloudmind.auth.cleanup-interval-ms:3600000}")
+    @Transactional
+    public void cleanupTokens() {
+        Instant now = Instant.now();
+        authTokenRepository.deleteExpiredOrOldRevoked(now, now.minus(Duration.ofDays(1)));
+    }
+
+    private AuthToken newToken(
+            AppUser user,
+            String rawToken,
+            String tokenType,
+            String familyId,
+            Instant expiresAt
+    ) {
+        AuthToken token = new AuthToken();
+        token.setUser(user);
+        token.setTokenHash(hashToken(rawToken));
+        token.setTokenType(tokenType);
+        token.setFamilyId(familyId);
+        token.setExpiresAt(expiresAt);
+        return token;
+    }
+
+    private Optional<AuthToken> findAnyToken(String rawToken, String tokenType) {
+        if (rawToken == null || rawToken.isBlank()) return Optional.empty();
+        return authTokenRepository.findByTokenHashAndTokenType(hashToken(rawToken), tokenType);
+    }
+
+    private void validateActiveToken(AuthToken token, String expiredMessage) {
+        if (token.getRevokedAt() != null) {
+            throw new SecurityException("登录状态已失效，请重新登录");
+        }
+        if (token.getExpiresAt() == null || !token.getExpiresAt().isAfter(Instant.now())) {
+            throw new SecurityException(expiredMessage);
+        }
+    }
+
+    private String randomToken(int byteLength) {
+        byte[] bytes = new byte[byteLength];
+        secureRandom.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private String hashToken(String rawToken) {
+        if (rawToken == null || rawToken.length() > 512) {
+            throw new SecurityException("令牌格式无效");
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(rawToken.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte value : hash) hex.append("%02x".formatted(value & 0xff));
+            return hex.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("令牌校验失败", e);
+        }
     }
 
     private String normalizeUsername(String username) {

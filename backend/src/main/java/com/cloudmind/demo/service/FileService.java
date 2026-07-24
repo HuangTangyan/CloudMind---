@@ -26,15 +26,18 @@ public class FileService {
     private final FileVersionRepository versionRepository;
     private final MinioStorageService storageService;
     private final TextAnalyzeService textAnalyzeService;
+    private final UploadSecurityService uploadSecurityService;
 
     public FileService(CloudFileRepository fileRepository,
                        FileVersionRepository versionRepository,
                        MinioStorageService storageService,
-                       TextAnalyzeService textAnalyzeService) {
+                       TextAnalyzeService textAnalyzeService,
+                       UploadSecurityService uploadSecurityService) {
         this.fileRepository = fileRepository;
         this.versionRepository = versionRepository;
         this.storageService = storageService;
         this.textAnalyzeService = textAnalyzeService;
+        this.uploadSecurityService = uploadSecurityService;
     }
 
     public Map<String, Object> list(AppUser user, Long parentId) {
@@ -100,7 +103,9 @@ public class FileService {
         }
         if (parentId != null) requireFolder(user, parentId, false);
         String originalName = cleanName(Optional.ofNullable(multipartFile.getOriginalFilename()).orElse("未命名文件"));
-        return saveUploadedFile(user, parentId, multipartFile, originalName);
+        UploadSecurityService.UploadInspection inspection =
+                uploadSecurityService.inspect(multipartFile, originalName);
+        return saveUploadedFile(user, parentId, multipartFile, originalName, inspection);
     }
 
     @Transactional
@@ -109,6 +114,21 @@ public class FileService {
         if (parentId != null) requireFolder(user, parentId, false);
         long totalSize = files.stream().filter(Objects::nonNull).mapToLong(MultipartFile::getSize).sum();
         ensureUploadAllowed(user, totalSize, 0L, "容量不足，无法上传文件夹。当前系统允许最多临时超出配额 50%，但该文件夹仍超过可上传上限。");
+        List<UploadSecurityService.UploadInspection> inspections =
+                new ArrayList<>(Collections.nCopies(files.size(), null));
+        for (int i = 0; i < files.size(); i++) {
+            MultipartFile file = files.get(i);
+            if (file == null || file.isEmpty()) continue;
+            String relativePath = relativePaths != null && i < relativePaths.size()
+                    ? relativePaths.get(i)
+                    : Optional.ofNullable(file.getOriginalFilename()).orElse("未命名文件");
+            String[] parts = relativePath.replace("\\", "/").split("/");
+            String finalName = parts.length == 0
+                    ? Optional.ofNullable(file.getOriginalFilename()).orElse("未命名文件")
+                    : parts[parts.length - 1];
+            String cleanFinalName = cleanName(finalName);
+            inspections.set(i, uploadSecurityService.inspect(file, cleanFinalName));
+        }
         List<Map<String, Object>> result = new ArrayList<>();
         Map<String, Long> folderCache = new HashMap<>();
         for (int i = 0; i < files.size(); i++) {
@@ -148,27 +168,35 @@ public class FileService {
                 folderCache.put(key, currentParent);
             }
             String finalName = parts.length == 0 ? Optional.ofNullable(file.getOriginalFilename()).orElse("未命名文件") : parts[parts.length - 1];
-            result.add(saveUploadedFile(user, currentParent, file, finalName));
+            result.add(saveUploadedFile(user, currentParent, file, finalName, inspections.get(i)));
         }
         return result;
     }
 
-    private Map<String, Object> saveUploadedFile(AppUser user, Long parentId, MultipartFile multipartFile, String rawName) {
+    private Map<String, Object> saveUploadedFile(
+            AppUser user,
+            Long parentId,
+            MultipartFile multipartFile,
+            String rawName,
+            UploadSecurityService.UploadInspection inspection
+    ) {
         String originalName = cleanName(rawName);
+        if (inspection == null) inspection = uploadSecurityService.inspect(multipartFile, originalName);
+        String verifiedContentType = inspection.contentType();
         Optional<CloudFile> oldSameName = findActiveSibling(user, parentId, originalName)
                 .filter(f -> f.getKind() == FileKind.FILE);
         long replacedSize = oldSameName.map(CloudFile::getSizeBytes).orElse(0L);
         ensureUploadAllowed(user, multipartFile.getSize(), replacedSize, "容量不足，无法上传。当前系统允许最多临时超出配额 50%，但该文件仍超过可上传上限。");
         String objectName = newObjectName(user, originalName);
-        storageService.upload(objectName, multipartFile);
+        storageService.upload(objectName, multipartFile, verifiedContentType);
         TextAnalyzeService.AnalysisResult analysis = analyzeObject(objectName, originalName,
-                multipartFile.getContentType(), multipartFile.getSize());
+                verifiedContentType, multipartFile.getSize());
 
         if (oldSameName.isPresent()) {
             CloudFile old = oldSameName.get();
             createVersion(old);
             old.setObjectName(objectName);
-            old.setContentType(multipartFile.getContentType() == null ? "application/octet-stream" : multipartFile.getContentType());
+            old.setContentType(verifiedContentType);
             old.setSizeBytes(multipartFile.getSize());
             old.setSummary(analysis.summary());
             old.setTags(analysis.tags());
@@ -188,7 +216,7 @@ public class FileService {
         file.setName(originalName);
         file.setKind(FileKind.FILE);
         file.setObjectName(objectName);
-        file.setContentType(multipartFile.getContentType() == null ? "application/octet-stream" : multipartFile.getContentType());
+        file.setContentType(verifiedContentType);
         file.setSizeBytes(multipartFile.getSize());
         file.setSummary(analysis.summary());
         file.setTags(analysis.tags());
@@ -235,14 +263,26 @@ public class FileService {
             mediaType = MediaType.parseMediaType(file.getContentType());
         } catch (Exception ignored) {}
 
-        ContentDisposition disposition = ContentDisposition.builder(inline ? "inline" : "attachment")
+        boolean safeInline = inline && isSafeInlineType(mediaType);
+        ContentDisposition disposition = ContentDisposition.builder(safeInline ? "inline" : "attachment")
                 .filename(file.getName(), StandardCharsets.UTF_8)
                 .build();
         return ResponseEntity.ok()
                 .contentType(mediaType)
                 .contentLength(file.getSizeBytes())
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
+                .header("X-Content-Type-Options", "nosniff")
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store, max-age=0")
+                .header("Content-Security-Policy", "sandbox; default-src 'none'")
                 .body(resource);
+    }
+
+    private boolean isSafeInlineType(MediaType mediaType) {
+        return MediaType.APPLICATION_PDF.includes(mediaType)
+                || "image".equalsIgnoreCase(mediaType.getType())
+                || "audio".equalsIgnoreCase(mediaType.getType())
+                || "video".equalsIgnoreCase(mediaType.getType())
+                || MediaType.TEXT_PLAIN.includes(mediaType);
     }
 
     public Map<String, Object> preview(AppUser user, Long fileId) {

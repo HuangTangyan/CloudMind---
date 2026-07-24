@@ -32,8 +32,22 @@ import AppBrand from './components/AppBrand.vue'
 import FileTypeIcon from './components/FileTypeIcon.vue'
 
 const API_BASE = '/api'
-const token = ref(localStorage.getItem('cloudmind-token') || '')
-const user = ref(JSON.parse(localStorage.getItem('cloudmind-user') || 'null'))
+const ALLOWED_UPLOAD_ACCEPT = [
+  '.pdf', '.txt', '.md', '.csv', '.json', '.xml', '.yml', '.yaml',
+  '.java', '.py', '.js', '.ts', '.css', '.sql', '.properties',
+  '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp',
+  '.mp4', '.webm', '.mov', '.mp3', '.wav', '.ogg'
+].join(',')
+const previousToken = localStorage.getItem('cloudmind-token') || ''
+const previousUser = localStorage.getItem('cloudmind-user') || 'null'
+const token = ref(sessionStorage.getItem('cloudmind-token') || previousToken)
+const refreshToken = ref(sessionStorage.getItem('cloudmind-refresh-token') || '')
+const user = ref(JSON.parse(sessionStorage.getItem('cloudmind-user') || previousUser))
+localStorage.removeItem('cloudmind-token')
+localStorage.removeItem('cloudmind-user')
+if (token.value) sessionStorage.setItem('cloudmind-token', token.value)
+if (user.value) sessionStorage.setItem('cloudmind-user', JSON.stringify(user.value))
 const username = ref('')
 const password = ref('')
 const currentPassword = ref('')
@@ -70,6 +84,7 @@ const playbackRate = ref(1)
 const activePreviewObjectUrl = ref('')
 const thumbnailUrls = ref({})
 let thumbnailGeneration = 0
+let refreshSessionPromise = null
 const targetDialog = ref({ visible: false, type: 'move', item: null, targetParentId: null, folders: [] })
 
 const adminTab = ref('dashboard')
@@ -528,10 +543,60 @@ function folderReviewTip(item) {
   return item.reviewNote || '下级文件审查正常'
 }
 
+function applyAuthSession(data) {
+  token.value = data?.accessToken || data?.token || ''
+  refreshToken.value = data?.refreshToken || ''
+  user.value = data?.user || null
+  if (token.value) sessionStorage.setItem('cloudmind-token', token.value)
+  else sessionStorage.removeItem('cloudmind-token')
+  if (refreshToken.value) sessionStorage.setItem('cloudmind-refresh-token', refreshToken.value)
+  else sessionStorage.removeItem('cloudmind-refresh-token')
+  if (user.value) sessionStorage.setItem('cloudmind-user', JSON.stringify(user.value))
+  else sessionStorage.removeItem('cloudmind-user')
+}
+
+function clearAuthState() {
+  token.value = ''
+  refreshToken.value = ''
+  user.value = null
+  replaceItems([])
+  releasePreviewObjectUrl()
+  sessionStorage.removeItem('cloudmind-token')
+  sessionStorage.removeItem('cloudmind-refresh-token')
+  sessionStorage.removeItem('cloudmind-user')
+  localStorage.removeItem('cloudmind-token')
+  localStorage.removeItem('cloudmind-user')
+}
+
+async function refreshAccessToken() {
+  if (!refreshToken.value) return false
+  if (!refreshSessionPromise) {
+    refreshSessionPromise = fetch(`${API_BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: refreshToken.value })
+    }).then(async response => {
+      if (!response.ok) return false
+      const result = await response.json()
+      applyAuthSession(result.data)
+      return Boolean(token.value)
+    }).catch(() => false).finally(() => {
+      refreshSessionPromise = null
+    })
+  }
+  return refreshSessionPromise
+}
+
 async function request(path, options = {}) {
-  const headers = options.headers ? { ...options.headers } : {}
+  const { skipAuthRefresh = false, ...fetchOptions } = options
+  const headers = fetchOptions.headers ? { ...fetchOptions.headers } : {}
   if (token.value) headers.Authorization = `Bearer ${token.value}`
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers })
+  if (response.status === 401 && refreshToken.value && !skipAuthRefresh && path !== '/auth/refresh') {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) return request(path, { ...options, skipAuthRefresh: true })
+    clearAuthState()
+  }
   const contentType = response.headers.get('content-type') || ''
   if (!response.ok) {
     if (contentType.includes('application/json')) {
@@ -559,10 +624,7 @@ async function login() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: username.value, password: password.value })
     })
-    token.value = res.data.token
-    user.value = res.data.user
-    localStorage.setItem('cloudmind-token', token.value)
-    localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
+    applyAuthSession(res.data)
     setMessage('登录成功')
     password.value = ''
     if (!mustChangePassword.value) await loadFiles(null, true)
@@ -581,10 +643,7 @@ async function register() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: username.value, password: password.value })
     })
-    token.value = res.data.token
-    user.value = res.data.user
-    localStorage.setItem('cloudmind-token', token.value)
-    localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
+    applyAuthSession(res.data)
     setMessage('注册成功')
     password.value = ''
     await loadFiles(null, true)
@@ -610,10 +669,7 @@ async function changePassword() {
         newPassword: newPassword.value
       })
     })
-    token.value = res.data.token
-    user.value = res.data.user
-    localStorage.setItem('cloudmind-token', token.value)
-    localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
+    applyAuthSession(res.data)
     currentPassword.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
@@ -626,13 +682,21 @@ async function changePassword() {
   }
 }
 
-function logout() {
-  token.value = ''
-  user.value = null
-  replaceItems([])
-  releasePreviewObjectUrl()
-  localStorage.removeItem('cloudmind-token')
-  localStorage.removeItem('cloudmind-user')
+async function logout() {
+  const accessToken = token.value
+  const sessionRefreshToken = refreshToken.value
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+      },
+      body: JSON.stringify({ refreshToken: sessionRefreshToken || null })
+    })
+  } finally {
+    clearAuthState()
+  }
 }
 
 async function loadFiles(parentId = currentParentId.value, resetBreadcrumb = false) {
@@ -1651,10 +1715,10 @@ onMounted(async () => {
     try {
       const res = await request('/auth/me')
       user.value = res.data
-      localStorage.setItem('cloudmind-user', JSON.stringify(user.value))
+      sessionStorage.setItem('cloudmind-user', JSON.stringify(user.value))
       if (!mustChangePassword.value) await loadFiles(null, true)
     } catch (e) {
-      logout()
+      clearAuthState()
     }
   }
 })
@@ -1786,8 +1850,8 @@ onBeforeUnmount(() => {
               <button class="primary top-action-button" @click="openAdmin('ai')"><Bot :size="17" />AI 审核配置</button>
               <button class="soft" @click="loadFiles(null, true)">返回网盘</button>
             </template>
-            <input ref="fileInput" type="file" multiple hidden @change="uploadFiles" />
-            <input ref="folderInput" type="file" webkitdirectory multiple hidden @change="uploadFolder" />
+            <input ref="fileInput" type="file" :accept="ALLOWED_UPLOAD_ACCEPT" multiple hidden @change="uploadFiles" />
+            <input ref="folderInput" type="file" :accept="ALLOWED_UPLOAD_ACCEPT" webkitdirectory multiple hidden @change="uploadFolder" />
             <div class="user-menu">
               <span class="avatar">{{ shortName(user.username) }}</span>
               <div><b>{{ user.username }}</b><small>{{ user.role }}</small></div>

@@ -40,12 +40,16 @@ public class MinioStorageService {
     }
 
     public void upload(String objectName, MultipartFile file) {
+        upload(objectName, file, file.getContentType());
+    }
+
+    public void upload(String objectName, MultipartFile file, String contentType) {
         try (InputStream inputStream = file.getInputStream()) {
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(properties.getBucket())
                     .object(objectName)
                     .stream(inputStream, file.getSize(), -1)
-                    .contentType(file.getContentType() == null ? "application/octet-stream" : file.getContentType())
+                    .contentType(contentType == null ? "application/octet-stream" : contentType)
                     .build());
         } catch (Exception e) {
             throw new IllegalStateException("上传到 MinIO 失败：" + e.getMessage(), e);
