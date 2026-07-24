@@ -327,6 +327,47 @@ public class AuthService {
     }
 
     @Transactional
+    public Map<String, Object> upgradeMembershipAndRotateSession(
+            String accessToken,
+            AppUser user,
+            String targetRole,
+            long targetQuotaBytes
+    ) {
+        AuthToken currentToken = requireStoredAccessToken(accessToken);
+        if (user == null
+                || user.getId() == null
+                || currentToken.getUser() == null
+                || !user.getId().equals(currentToken.getUser().getId())) {
+            throw new SecurityException("登录状态与兑换账号不匹配");
+        }
+
+        String normalizedRole = normalizeRole(targetRole);
+        if (!"VIP".equals(normalizedRole) && !"SVIP".equals(normalizedRole)) {
+            throw new IllegalArgumentException("邀请码只能升级为 VIP 或 SVIP");
+        }
+        if (membershipRank(user.getRole()) >= membershipRank(normalizedRole)) {
+            throw new IllegalArgumentException("当前会员等级无需使用该邀请码");
+        }
+
+        String clientIp = currentToken.getClientIp();
+        String userAgent = currentToken.getUserAgent();
+        user.setRole(normalizedRole);
+        user.setQuotaBytes(Math.max(
+                user.getQuotaBytes() == null ? 0L : user.getQuotaBytes(),
+                normalizeQuota(targetQuotaBytes)
+        ));
+        userRepository.save(user);
+
+        revokeTokens(user.getId());
+        return issueSession(
+                user,
+                UUID.randomUUID().toString(),
+                clientIp,
+                userAgent
+        );
+    }
+
+    @Transactional
     public AppUser setUserEnabledByAdmin(AppUser admin, Long userId, boolean enabled) {
         AppUser user = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("用户不存在"));
         if (admin.getId().equals(user.getId())) throw new IllegalArgumentException("不能封禁/解封当前登录的管理员账号");
@@ -588,6 +629,16 @@ public class AuthService {
         return switch (value) {
             case "ADMIN", "USER", "VIP", "SVIP" -> value;
             default -> throw new IllegalArgumentException("权限等级只能是 USER、VIP、SVIP 或 ADMIN");
+        };
+    }
+
+    private int membershipRank(String role) {
+        if (role == null) return 0;
+        return switch (role.trim().toUpperCase()) {
+            case "VIP" -> 1;
+            case "SVIP" -> 2;
+            case "ADMIN" -> 3;
+            default -> 0;
         };
     }
 

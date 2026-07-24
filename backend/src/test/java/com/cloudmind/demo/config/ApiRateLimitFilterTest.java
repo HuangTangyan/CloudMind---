@@ -86,4 +86,47 @@ class ApiRateLimitFilterTest {
             SecurityContextHolder.clearContext();
         }
     }
+
+    @Test
+    void inviteRedemptionIsLimitedByUserAndIp() throws Exception {
+        Clock clock = Clock.fixed(Instant.parse("2026-07-24T00:00:00Z"), ZoneOffset.UTC);
+        ApiRateLimitFilter filter = new ApiRateLimitFilter(new ObjectMapper(), clock);
+        ReflectionTestUtils.setField(filter, "inviteRedeemPer15Minutes", 1);
+        AppUser user = new AppUser();
+        user.setId(88L);
+        user.setUsername("invite-user");
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, null)
+        );
+
+        try {
+            MockHttpServletRequest first = new MockHttpServletRequest(
+                    "POST",
+                    "/api/invites/redeem"
+            );
+            first.setRemoteAddr("203.0.113.20");
+            filter.doFilter(
+                    first,
+                    new MockHttpServletResponse(),
+                    (ignoredRequest, ignoredResponse) -> {}
+            );
+
+            MockHttpServletRequest second = new MockHttpServletRequest(
+                    "POST",
+                    "/api/invites/redeem"
+            );
+            second.setRemoteAddr("203.0.113.21");
+            MockHttpServletResponse blocked = new MockHttpServletResponse();
+            filter.doFilter(
+                    second,
+                    blocked,
+                    (ignoredRequest, ignoredResponse) -> {}
+            );
+
+            assertEquals(429, blocked.getStatus());
+            assertTrue(blocked.getHeader("Retry-After") != null);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
 }

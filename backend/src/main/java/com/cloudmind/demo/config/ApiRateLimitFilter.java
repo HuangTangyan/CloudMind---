@@ -39,6 +39,9 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
     @Value("${cloudmind.rate-limit.password-change-per-15-minutes:5}")
     private int passwordChangePer15Minutes = 5;
 
+    @Value("${cloudmind.rate-limit.invite-redeem-per-15-minutes:10}")
+    private int inviteRedeemPer15Minutes = 10;
+
     @Value("${cloudmind.rate-limit.upload-per-minute:30}")
     private int uploadPerMinute = 30;
 
@@ -124,6 +127,9 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         }
         if ("/api/auth/change-password".equals(path)) {
             return new Policy("password-change", positive(passwordChangePer15Minutes), 900_000L, true);
+        }
+        if ("/api/invites/redeem".equals(path)) {
+            return new Policy("invite-redeem", positive(inviteRedeemPer15Minutes), 900_000L, true);
         }
         if (path.startsWith("/api/files/upload")) {
             return new Policy("upload", positive(uploadPerMinute), 60_000L, true);

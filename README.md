@@ -110,6 +110,7 @@ mysql -u <管理员> -p <数据库名> < backend/deploy/001-security-batch1.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/002-auth-token-security.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/003-security-batch3.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/004-security-batch4.sql
+mysql -u <管理员> -p <数据库名> < backend/deploy/005-invite-codes.sql
 ```
 
 第二批安全加固启用了 Spring Security 统一鉴权、30 分钟访问令牌、

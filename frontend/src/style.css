@@ -851,6 +851,119 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
 .session-tip { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .danger-action:not(:disabled) { color: #b4233b; border-color: #efb8c2; }
 .danger-action:not(:disabled):hover { background: #fff1f3; border-color: #df8292; }
+
+.side-membership-actions { display: grid; gap: 8px; }
+.side-membership-actions button { width: 100%; justify-content: center; }
+.side-membership-actions .link { min-height: 32px; padding: 5px 8px; font-size: 12px; }
+
+.invite-admin-section { display: grid; gap: 18px; }
+.invite-admin-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(260px, .65fr); gap: 16px; }
+.invite-admin-grid > * { min-width: 0; }
+.invite-generator-card,
+.invite-policy-card,
+.invite-batch-card {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.invite-card-heading { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 18px; }
+.invite-card-heading h3, .invite-policy-card h3, .invite-batch-card h3 { margin: 0; }
+.invite-card-heading p, .invite-policy-card p, .invite-batch-card p { margin: 5px 0 0; color: var(--muted); line-height: 1.55; }
+.invite-icon {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  color: #7c4d00;
+  background: #fff4d7;
+}
+.invite-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.invite-form-grid label, .invite-code-field {
+  display: grid;
+  gap: 7px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+.invite-note-field { grid-column: 1 / -1; }
+.invite-export-notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 16px 0;
+  padding: 12px 14px;
+  border: 1px solid #cfe0f6;
+  border-radius: 12px;
+  color: #315b96;
+  background: #f7fbff;
+}
+.invite-export-notice svg { flex: 0 0 auto; margin-top: 1px; }
+.invite-export-notice p { margin: 0; }
+.invite-export-notice b, .invite-export-notice span { display: block; }
+.invite-export-notice span { margin-top: 3px; color: #587397; font-size: 12px; line-height: 1.5; }
+.invite-export-button { width: 100%; justify-content: center; }
+.invite-policy-card { background: #fbfcff; }
+.invite-policy-card ul { display: grid; gap: 14px; margin: 18px 0 0; padding: 0; list-style: none; }
+.invite-policy-card li { padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+.invite-policy-card li:last-child { padding-bottom: 0; border-bottom: 0; }
+.invite-policy-card li b, .invite-policy-card li span { display: block; }
+.invite-policy-card li b { color: #334155; font-size: 13px; }
+.invite-policy-card li span { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.invite-batch-card .panel-head { align-items: flex-start; }
+.invite-batch-table { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
+.invite-batch-row {
+  display: grid;
+  grid-template-columns: minmax(250px, 1.4fr) 90px minmax(130px, .7fr) minmax(210px, 1fr) 90px;
+  gap: 12px;
+  align-items: center;
+  min-height: 66px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+.invite-batch-row:first-child { border-top: 0; }
+.invite-batch-row.head { min-height: 42px; color: var(--muted); background: #f8fafc; font-size: 12px; font-weight: 800; }
+.invite-batch-row small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.45; }
+.invite-status.active { background: #e9f8ef; color: #147344; }
+.invite-status.expired { background: #f1f5f9; color: #64748b; }
+
+.invite-redeem-modal { width: min(680px, 100%); }
+.membership-levels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+.membership-levels article {
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfcff;
+}
+.membership-levels article.featured { border-color: #e6cf8f; background: #fffbef; }
+.membership-levels span {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--primary-dark);
+  background: var(--primary-soft);
+  font-size: 11px;
+  font-weight: 900;
+}
+.membership-levels .featured span { color: #7c4d00; background: #fff0c7; }
+.membership-levels b, .membership-levels small { display: block; }
+.membership-levels b { margin-top: 10px; color: #24324a; }
+.membership-levels small { margin-top: 5px; color: var(--muted); line-height: 1.5; }
+.invite-code-field input { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .5px; text-transform: uppercase; }
+.invite-privacy-tip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.message.inline.success { border-color: #bfe7cf; color: #16724a; background: #edf9f2; }
+
 .loading { display: inline-flex; align-items: center; gap: 9px; border-radius: 999px; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -859,13 +972,14 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .workspace { padding-inline: 18px; }
   .topbar { flex-wrap: wrap; align-items: flex-start; }
   .global-search { width: min(520px, 100%); flex: 1 1 420px; }
-  .top-actions { flex: 0 1 auto; flex-wrap: wrap; }
+  .top-actions { width: 100%; margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-end; }
   .file-row { grid-template-columns: minmax(180px, 1.15fr) minmax(160px, 1fr) 70px 124px minmax(190px, auto); }
   .file-row > :nth-child(5) { display: none; }
   .file-row.head > :nth-child(5) { display: none; }
   .admin-main-grid { grid-template-columns: minmax(0, 1fr) minmax(260px, .75fr); }
   .admin-main-grid .system-card { grid-column: 1 / -1; }
   .admin-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .invite-admin-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 1220px) {
@@ -877,6 +991,7 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .knowledge-source-panel { min-height: auto; }
   .create-user-card { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .create-user-card button { width: max-content; }
+  .invite-admin-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 1120px) {
@@ -965,6 +1080,21 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .admin-table, .disk-table { display: grid; gap: 10px; border: 0; background: transparent; overflow: visible; }
   .admin-row:not(.head), .disk-row:not(.head) { border: 1px solid var(--line); background: #fff; }
   .admin-actions, .row-actions { justify-content: flex-start; }
+  .invite-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .invite-note-field { grid-column: auto; }
+  .invite-batch-table { display: grid; gap: 10px; overflow: visible; border: 0; }
+  .invite-batch-row.head { display: none; }
+  .invite-batch-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fff;
+  }
+  .invite-batch-row > :first-child,
+  .invite-batch-row > :nth-child(3),
+  .invite-batch-row > :nth-child(4) { grid-column: 1 / -1; }
+  .invite-batch-row > :nth-child(5) { justify-self: end; }
   .modal-mask { align-items: flex-end; padding: 10px; }
   .modal { width: 100%; max-height: 94dvh; padding: 18px; border-radius: 20px 20px 12px 12px; }
   .session-row { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
@@ -988,6 +1118,7 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .admin-action-grid { grid-template-columns: minmax(0, 1fr); }
   .admin-kpi b { font-size: 23px; }
   .page-head { align-items: flex-start; flex-direction: column; }
+  .membership-levels { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

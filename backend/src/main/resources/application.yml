@@ -34,6 +34,11 @@ cloudmind:
     password: ${CLOUDMIND_BOOTSTRAP_ADMIN_PASSWORD:}
   demo:
     default-quota-bytes: ${DEFAULT_QUOTA_BYTES:10737418240}
+  membership:
+    vip-quota-bytes: ${VIP_QUOTA_BYTES:53687091200}
+    svip-quota-bytes: ${SVIP_QUOTA_BYTES:214748364800}
+  invites:
+    max-batch-size: ${INVITE_MAX_BATCH_SIZE:500}
   ai:
     api-key: ${CLOUDMIND_AI_API_KEY:}
     require-environment-key: false
@@ -51,6 +56,7 @@ cloudmind:
     register-per-hour: ${RATE_LIMIT_REGISTER_PER_HOUR:3}
     refresh-per-minute: ${RATE_LIMIT_REFRESH_PER_MINUTE:30}
     password-change-per-15-minutes: ${RATE_LIMIT_PASSWORD_CHANGE_PER_15_MINUTES:5}
+    invite-redeem-per-15-minutes: ${RATE_LIMIT_INVITE_REDEEM_PER_15_MINUTES:10}
     upload-per-minute: ${RATE_LIMIT_UPLOAD_PER_MINUTE:30}
     ai-per-minute: ${RATE_LIMIT_AI_PER_MINUTE:30}
   upload:

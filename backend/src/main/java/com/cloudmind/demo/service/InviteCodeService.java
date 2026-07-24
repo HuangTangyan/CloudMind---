@@ -1,0 +1,320 @@
+package com.cloudmind.demo.service;
+
+import com.cloudmind.demo.dto.CreateInviteBatchRequest;
+import com.cloudmind.demo.entity.AppUser;
+import com.cloudmind.demo.entity.InviteCode;
+import com.cloudmind.demo.entity.InviteCodeBatch;
+import com.cloudmind.demo.repository.InviteCodeBatchRepository;
+import com.cloudmind.demo.repository.InviteCodeRepository;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+@Service
+public class InviteCodeService {
+    private static final char[] CODE_ALPHABET =
+            "ABCDEFGHJKMNPQRSTUVWXYZ23456789".toCharArray();
+    private static final DateTimeFormatter BATCH_TIME =
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
+    private static final int RANDOM_CODE_LENGTH = 26;
+
+    private final InviteCodeBatchRepository batchRepository;
+    private final InviteCodeRepository codeRepository;
+    private final AuthService authService;
+    private final SecureRandom secureRandom = new SecureRandom();
+
+    @Value("${cloudmind.invites.max-batch-size:500}")
+    private int maxBatchSize = 500;
+
+    @Value("${cloudmind.membership.vip-quota-bytes:53687091200}")
+    private long vipQuotaBytes = 50L * 1024 * 1024 * 1024;
+
+    @Value("${cloudmind.membership.svip-quota-bytes:214748364800}")
+    private long svipQuotaBytes = 200L * 1024 * 1024 * 1024;
+
+    public InviteCodeService(
+            InviteCodeBatchRepository batchRepository,
+            InviteCodeRepository codeRepository,
+            AuthService authService
+    ) {
+        this.batchRepository = batchRepository;
+        this.codeRepository = codeRepository;
+        this.authService = authService;
+    }
+
+    @Transactional
+    public InviteBatchExport createBatchExport(
+            AppUser admin,
+            CreateInviteBatchRequest request,
+            String requestedFormat
+    ) {
+        if (admin == null || !authService.isAdmin(admin)) {
+            throw new SecurityException("需要管理员权限");
+        }
+        String role = normalizeTargetRole(request.getRole());
+        String format = normalizeFormat(requestedFormat);
+        int configuredLimit = Math.max(1, Math.min(500, maxBatchSize));
+        if (request.getCount() < 1 || request.getCount() > configuredLimit) {
+            throw new IllegalArgumentException("单批邀请码数量应为 1-" + configuredLimit);
+        }
+
+        Instant now = Instant.now();
+        Instant expiresAt = request.getExpiresAt();
+        if (expiresAt == null || !expiresAt.isAfter(now.plus(Duration.ofMinutes(5)))) {
+            throw new IllegalArgumentException("邀请码有效期至少应晚于当前时间 5 分钟");
+        }
+        if (expiresAt.isAfter(now.plus(Duration.ofDays(365)))) {
+            throw new IllegalArgumentException("邀请码有效期不能超过 365 天");
+        }
+
+        InviteCodeBatch batch = new InviteCodeBatch();
+        batch.setBatchNo(newBatchNo(now));
+        batch.setTargetRole(role);
+        batch.setTotalCount(request.getCount());
+        batch.setExpiresAt(expiresAt);
+        batch.setNote(normalizeNote(request.getNote()));
+        batch.setExportFormat(format.toUpperCase(Locale.ROOT));
+        batch.setCreatedBy(admin);
+        batch.setCreatedAt(now);
+        batch = batchRepository.save(batch);
+
+        List<String> plainCodes = new ArrayList<>(request.getCount());
+        List<InviteCode> storedCodes = new ArrayList<>(request.getCount());
+        Set<String> hashes = new HashSet<>();
+        while (plainCodes.size() < request.getCount()) {
+            String displayCode = generateDisplayCode();
+            String codeHash = hashCanonicalCode(canonicalCode(displayCode));
+            if (!hashes.add(codeHash) || codeRepository.existsByCodeHash(codeHash)) {
+                continue;
+            }
+            InviteCode code = new InviteCode();
+            code.setBatch(batch);
+            code.setCodeHash(codeHash);
+            code.setCreatedAt(now);
+            plainCodes.add(displayCode);
+            storedCodes.add(code);
+        }
+        codeRepository.saveAll(storedCodes);
+
+        byte[] content = "csv".equals(format)
+                ? csvContent(batch, plainCodes)
+                : txtContent(plainCodes);
+        String extension = "csv".equals(format) ? "csv" : "txt";
+        String contentType = "csv".equals(format)
+                ? "text/csv;charset=UTF-8"
+                : "text/plain;charset=UTF-8";
+        String filename = "cloudmind-" + role.toLowerCase(Locale.ROOT)
+                + "-" + batch.getBatchNo().toLowerCase(Locale.ROOT)
+                + "." + extension;
+        return new InviteBatchExport(
+                filename,
+                contentType,
+                content,
+                batch.getBatchNo(),
+                request.getCount()
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listBatches(AppUser admin) {
+        if (admin == null || !authService.isAdmin(admin)) {
+            throw new SecurityException("需要管理员权限");
+        }
+        Instant now = Instant.now();
+        return batchRepository.findTop100ByOrderByCreatedAtDesc().stream()
+                .map(batch -> toBatchMap(batch, now))
+                .toList();
+    }
+
+    @Transactional
+    public Map<String, Object> redeem(String accessToken, String plainCode) {
+        AppUser user = authService.requireUser(accessToken);
+        String codeHash = hashCanonicalCode(canonicalCode(plainCode));
+        InviteCode code = codeRepository.findForUpdateByCodeHash(codeHash)
+                .orElseThrow(this::unavailableCode);
+        InviteCodeBatch batch = code.getBatch();
+        Instant now = Instant.now();
+        if (code.getRedeemedAt() != null
+                || batch.getExpiresAt() == null
+                || !batch.getExpiresAt().isAfter(now)) {
+            throw unavailableCode();
+        }
+
+        String targetRole = normalizeTargetRole(batch.getTargetRole());
+        if (membershipRank(user.getRole()) >= membershipRank(targetRole)) {
+            throw new IllegalArgumentException("当前会员等级无需使用该邀请码");
+        }
+
+        long targetQuota = "SVIP".equals(targetRole) ? svipQuotaBytes : vipQuotaBytes;
+        Map<String, Object> session = authService.upgradeMembershipAndRotateSession(
+                accessToken,
+                user,
+                targetRole,
+                targetQuota
+        );
+        code.setRedeemedBy(user);
+        code.setRedeemedAt(now);
+        codeRepository.save(code);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("targetRole", targetRole);
+        result.put("batchNo", batch.getBatchNo());
+        result.put("redeemedAt", now);
+        result.put("session", session);
+        return result;
+    }
+
+    private Map<String, Object> toBatchMap(InviteCodeBatch batch, Instant now) {
+        long redeemedCount = batch.getId() == null
+                ? 0L
+                : codeRepository.countByBatch_IdAndRedeemedAtIsNotNull(batch.getId());
+        int totalCount = batch.getTotalCount() == null ? 0 : batch.getTotalCount();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", batch.getId());
+        result.put("batchNo", batch.getBatchNo());
+        result.put("targetRole", batch.getTargetRole());
+        result.put("totalCount", totalCount);
+        result.put("redeemedCount", redeemedCount);
+        result.put("remainingCount", Math.max(0L, totalCount - redeemedCount));
+        result.put("status", batch.getExpiresAt() != null && batch.getExpiresAt().isAfter(now)
+                ? "ACTIVE"
+                : "EXPIRED");
+        result.put("expiresAt", batch.getExpiresAt());
+        result.put("note", batch.getNote() == null ? "" : batch.getNote());
+        result.put("exportFormat", batch.getExportFormat());
+        result.put("createdAt", batch.getCreatedAt());
+        result.put("createdBy", batch.getCreatedBy() == null
+                ? "已删除账号"
+                : batch.getCreatedBy().getUsername());
+        return result;
+    }
+
+    private byte[] txtContent(List<String> plainCodes) {
+        String content = String.join("\r\n", plainCodes) + "\r\n";
+        return content.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private byte[] csvContent(InviteCodeBatch batch, List<String> plainCodes) {
+        StringBuilder content = new StringBuilder("\uFEFF");
+        content.append("code,role,expires_at,batch_no\r\n");
+        for (String code : plainCodes) {
+            content.append(csvCell(code)).append(',')
+                    .append(csvCell(batch.getTargetRole())).append(',')
+                    .append(csvCell(batch.getExpiresAt().toString())).append(',')
+                    .append(csvCell(batch.getBatchNo())).append("\r\n");
+        }
+        return content.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private String csvCell(String value) {
+        String safe = value == null ? "" : value;
+        if (!safe.isEmpty() && "=+-@".indexOf(safe.charAt(0)) >= 0) {
+            safe = "'" + safe;
+        }
+        return "\"" + safe.replace("\"", "\"\"") + "\"";
+    }
+
+    private String generateDisplayCode() {
+        StringBuilder raw = new StringBuilder(RANDOM_CODE_LENGTH);
+        for (int i = 0; i < RANDOM_CODE_LENGTH; i++) {
+            raw.append(CODE_ALPHABET[secureRandom.nextInt(CODE_ALPHABET.length)]);
+        }
+        return "CM-" + raw.substring(0, 5)
+                + "-" + raw.substring(5, 10)
+                + "-" + raw.substring(10, 15)
+                + "-" + raw.substring(15, 20)
+                + "-" + raw.substring(20);
+    }
+
+    private String newBatchNo(Instant now) {
+        StringBuilder suffix = new StringBuilder(6);
+        for (int i = 0; i < 6; i++) {
+            suffix.append(CODE_ALPHABET[secureRandom.nextInt(CODE_ALPHABET.length)]);
+        }
+        return "CM-" + BATCH_TIME.format(now) + "-" + suffix;
+    }
+
+    private String canonicalCode(String plainCode) {
+        if (plainCode == null || plainCode.length() > 96) throw unavailableCode();
+        String canonical = plainCode
+                .toUpperCase(Locale.ROOT)
+                .replaceAll("[\\s-]+", "");
+        if (!canonical.matches("CM[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{26}")) {
+            throw unavailableCode();
+        }
+        return canonical;
+    }
+
+    private String hashCanonicalCode(String canonicalCode) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(canonicalCode.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte value : hash) hex.append("%02x".formatted(value & 0xff));
+            return hex.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("邀请码校验失败", e);
+        }
+    }
+
+    private String normalizeTargetRole(String role) {
+        String value = role == null ? "" : role.trim().toUpperCase(Locale.ROOT);
+        if (!"VIP".equals(value) && !"SVIP".equals(value)) {
+            throw new IllegalArgumentException("邀请码只能升级为 VIP 或 SVIP");
+        }
+        return value;
+    }
+
+    private String normalizeFormat(String format) {
+        String value = format == null ? "txt" : format.trim().toLowerCase(Locale.ROOT);
+        if (!"txt".equals(value) && !"csv".equals(value)) {
+            throw new IllegalArgumentException("导出格式只能是 TXT 或 CSV");
+        }
+        return value;
+    }
+
+    private String normalizeNote(String note) {
+        if (note == null || note.isBlank()) return "";
+        String value = note.replaceAll("[\\p{Cntrl}&&[^\\t]]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return value.length() <= 200 ? value : value.substring(0, 200);
+    }
+
+    private int membershipRank(String role) {
+        if (role == null) return 0;
+        return switch (role.trim().toUpperCase(Locale.ROOT)) {
+            case "VIP" -> 1;
+            case "SVIP" -> 2;
+            case "ADMIN" -> 3;
+            default -> 0;
+        };
+    }
+
+    private IllegalArgumentException unavailableCode() {
+        return new IllegalArgumentException("邀请码无效或不可使用");
+    }
+
+    public record InviteBatchExport(
+            String filename,
+            String contentType,
+            byte[] content,
+            String batchNo,
+            int count
+    ) {}
+}

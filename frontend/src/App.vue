@@ -6,6 +6,8 @@ import {
   Bot,
   ClipboardCheck,
   Cloud,
+  Crown,
+  Download,
   FilePlus2,
   FileText,
   Folder,
@@ -21,6 +23,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Ticket,
   Trash2,
   Upload,
   Users,
@@ -89,11 +92,22 @@ let thumbnailGeneration = 0
 let refreshSessionPromise = null
 const targetDialog = ref({ visible: false, type: 'move', item: null, targetParentId: null, folders: [] })
 const sessionDialog = ref({ visible: false, loading: false, error: '', items: [] })
+const inviteRedeemInput = ref(null)
+const inviteRedeemDialog = ref({ visible: false, code: '', loading: false, error: '', success: '' })
 
 const adminTab = ref('dashboard')
 const adminUsers = ref([])
 const storageOverview = ref(null)
 const adminCreateForm = ref({ username: '', password: '', role: 'USER', quotaGb: 10 })
+const adminInviteBatches = ref([])
+const adminInviteLoading = ref(false)
+const adminInviteForm = ref({
+  role: 'VIP',
+  count: 20,
+  expiresAt: defaultInviteExpiry(),
+  note: '校园内测',
+  format: 'txt'
+})
 const auditUsers = ref([])
 const auditItems = ref([])
 const auditBreadcrumb = ref([])
@@ -1411,6 +1425,7 @@ async function openAdmin(tab = 'dashboard') {
   if (tab === 'audit') await loadAuditUsers()
   if (tab === 'storage') await loadAdminStorageOverview()
   if (tab === 'ai') await loadAiConfig()
+  if (tab === 'invites') await loadAdminInviteBatches()
 }
 
 async function loadAdminDashboard() {
@@ -1452,6 +1467,121 @@ async function loadAdminStorageOverview() {
     setMessage(e.message)
   } finally {
     loading.value = false
+  }
+}
+
+function defaultInviteExpiry() {
+  const value = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  value.setMinutes(value.getMinutes() - value.getTimezoneOffset())
+  return value.toISOString().slice(0, 16)
+}
+
+function openInviteRedeemDialog() {
+  inviteRedeemDialog.value = {
+    visible: true,
+    code: '',
+    loading: false,
+    error: '',
+    success: ''
+  }
+  nextTick(() => inviteRedeemInput.value?.focus())
+}
+
+function closeInviteRedeemDialog() {
+  if (inviteRedeemDialog.value.loading) return
+  inviteRedeemDialog.value.visible = false
+}
+
+async function redeemInviteCode() {
+  const dialog = inviteRedeemDialog.value
+  const code = String(dialog.code || '').trim()
+  if (!code) {
+    dialog.error = '请输入邀请码'
+    return
+  }
+  dialog.loading = true
+  dialog.error = ''
+  dialog.success = ''
+  try {
+    const res = await request('/invites/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code })
+    })
+    applyAuthSession(res.data?.session)
+    quotaBytes.value = Number(user.value?.quotaBytes || quotaBytes.value || 0)
+    dialog.code = ''
+    dialog.success = `兑换成功，当前等级已升级为 ${res.data?.targetRole || user.value?.role || '会员'}。其他设备已安全退出。`
+    setMessage('会员邀请码兑换成功')
+  } catch (e) {
+    dialog.error = e.message
+  } finally {
+    dialog.loading = false
+  }
+}
+
+async function loadAdminInviteBatches(showLoading = true) {
+  if (showLoading) adminInviteLoading.value = true
+  try {
+    const res = await request('/admin/invite-batches')
+    adminInviteBatches.value = Array.isArray(res.data) ? res.data : []
+  } catch (e) {
+    setMessage(e.message)
+  } finally {
+    if (showLoading) adminInviteLoading.value = false
+  }
+}
+
+function inviteBatchStatusText(batch) {
+  return batch?.status === 'ACTIVE' ? '有效' : '已过期'
+}
+
+function inviteBatchStatusClass(batch) {
+  return batch?.status === 'ACTIVE' ? 'active' : 'expired'
+}
+
+function inviteDownloadName(format, role) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return `cloudmind-${String(role || 'vip').toLowerCase()}-${stamp}.${format}`
+}
+
+async function generateInviteBatch() {
+  const form = adminInviteForm.value
+  const count = Number(form.count)
+  if (!Number.isInteger(count) || count < 1 || count > 500) {
+    setMessage('单批生成数量应为 1-500')
+    return
+  }
+  if (!form.expiresAt || new Date(form.expiresAt).getTime() <= Date.now() + 5 * 60 * 1000) {
+    setMessage('邀请码有效期至少应晚于当前时间 5 分钟')
+    return
+  }
+  adminInviteLoading.value = true
+  try {
+    const response = await request(`/admin/invite-batches/export?format=${encodeURIComponent(form.format)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        role: form.role,
+        count,
+        expiresAt: new Date(form.expiresAt).toISOString(),
+        note: String(form.note || '').trim()
+      })
+    })
+    const objectUrl = URL.createObjectURL(await response.blob())
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = inviteDownloadName(form.format, form.role)
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(objectUrl)
+    setMessage(`已生成 ${count} 个 ${form.role} 邀请码并下载 ${String(form.format).toUpperCase()} 文件`)
+    await loadAdminInviteBatches(false)
+  } catch (e) {
+    setMessage(e.message)
+  } finally {
+    adminInviteLoading.value = false
   }
 }
 
@@ -1861,6 +1991,7 @@ onBeforeUnmount(() => {
         <nav v-else class="side-nav admin-nav" aria-label="管理员功能" @click="sidebarOpen = false">
           <button :class="{ active: adminTab === 'dashboard' }" @click="openAdmin('dashboard')"><Home :size="19" />控制台</button>
           <button :class="{ active: adminTab === 'users' }" @click="openAdmin('users')"><Users :size="19" />用户管理</button>
+          <button :class="{ active: adminTab === 'invites' }" @click="openAdmin('invites')"><Ticket :size="19" />会员邀请码</button>
           <button :class="{ active: adminTab === 'audit' }" @click="openAdmin('audit')"><ClipboardCheck :size="19" />文件审核 <em>{{ adminAbnormalFiles }}</em></button>
           <button :class="{ active: adminTab === 'storage' }" @click="openAdmin('storage')"><HardDrive :size="19" />存储监控</button>
           <button :class="{ active: adminTab === 'ai' }" @click="openAdmin('ai')"><Bot :size="19" />AI 审核</button>
@@ -1871,7 +2002,10 @@ onBeforeUnmount(() => {
           <div class="side-title"><b>存储空间</b><span>已用 {{ usedPercent }}%</span></div>
           <div class="thin-bar"><i :style="{ width: usedPercent + '%' }"></i></div>
           <p>{{ formatSize(usedBytes) }} / {{ formatSize(quotaBytes) }}</p>
-          <button class="outline" @click="isAdmin ? openAdmin('storage') : setMessage('请联系管理员升级容量')">{{ isAdmin ? '管理存储空间' : '升级空间' }}</button>
+          <div class="side-membership-actions">
+            <button class="outline" @click="isAdmin ? openAdmin('invites') : openInviteRedeemDialog()"><Ticket :size="16" />{{ isAdmin ? '管理邀请码' : '兑换会员邀请码' }}</button>
+            <button class="link" @click="isAdmin ? openAdmin('storage') : setMessage('没有邀请码时，请联系管理员')">{{ isAdmin ? '管理存储空间' : '联系管理员升级' }}</button>
+          </div>
         </div>
 
 
@@ -2253,9 +2387,9 @@ onBeforeUnmount(() => {
                   <button @click="adminAiReviewPending">一键 AI 审核未审查文件</button>
                   <button @click="adminAiReviewAll">一键全部 AI 审查</button>
                   <button @click="openAdmin('users')">重置用户密码</button>
+                  <button @click="openAdmin('invites')">生成会员邀请码</button>
                   <button @click="openAdmin('storage')">查看服务器容量</button>
                   <button @click="openAdmin('audit')">全站违规审查</button>
-                  <button @click="openAdmin('ai')">配置 AI 接口</button>
                 </div>
               </section>
             </div>
@@ -2288,6 +2422,85 @@ onBeforeUnmount(() => {
                 </span>
               </div>
             </div>
+          </section>
+
+          <section v-else-if="adminTab === 'invites'" class="admin-section invite-admin-section">
+            <div class="section-head">
+              <div>
+                <span class="eyebrow">Membership invites</span>
+                <h2>会员邀请码</h2>
+                <p>批量生成一次性 VIP / SVIP 邀请码，并在生成时下载明文文件。</p>
+              </div>
+              <button class="soft" :disabled="adminInviteLoading" @click="loadAdminInviteBatches">刷新批次</button>
+            </div>
+
+            <div class="invite-admin-grid">
+              <form class="invite-generator-card" @submit.prevent="generateInviteBatch">
+                <div class="invite-card-heading">
+                  <span class="invite-icon"><Crown :size="22" /></span>
+                  <div><h3>生成新批次</h3><p>每批只生成一种等级，便于自动发货和泄露追踪。</p></div>
+                </div>
+                <div class="invite-form-grid">
+                  <label>会员等级
+                    <select v-model="adminInviteForm.role" :disabled="adminInviteLoading">
+                      <option value="VIP">VIP</option>
+                      <option value="SVIP">SVIP</option>
+                    </select>
+                  </label>
+                  <label>生成数量
+                    <input v-model.number="adminInviteForm.count" type="number" min="1" max="500" step="1" :disabled="adminInviteLoading" />
+                  </label>
+                  <label>有效期
+                    <input v-model="adminInviteForm.expiresAt" type="datetime-local" :disabled="adminInviteLoading" />
+                  </label>
+                  <label>导出格式
+                    <select v-model="adminInviteForm.format" :disabled="adminInviteLoading">
+                      <option value="txt">TXT · 每行一个码</option>
+                      <option value="csv">CSV · 带批次信息</option>
+                    </select>
+                  </label>
+                  <label class="invite-note-field">批次备注
+                    <input v-model="adminInviteForm.note" maxlength="200" :disabled="adminInviteLoading" placeholder="例如：校园首轮内测" />
+                  </label>
+                </div>
+                <div class="invite-export-notice">
+                  <ShieldCheck :size="18" />
+                  <p><b>明文仅下载一次</b><span>系统只保存哈希。文件丢失后不能重新查看原邀请码。</span></p>
+                </div>
+                <button class="primary invite-export-button" type="submit" :disabled="adminInviteLoading">
+                  <LoaderCircle v-if="adminInviteLoading" class="spin" :size="18" />
+                  <Download v-else :size="18" />
+                  {{ adminInviteLoading ? '正在安全生成…' : `生成并下载 ${adminInviteForm.format.toUpperCase()}` }}
+                </button>
+              </form>
+
+              <section class="invite-policy-card">
+                <span class="eyebrow">Safety rules</span>
+                <h3>发货前检查</h3>
+                <ul>
+                  <li><b>VIP 与 SVIP 分开批次</b><span>避免上架时选错权益。</span></li>
+                  <li><b>设置合理有效期</b><span>短期活动建议 7–30 天。</span></li>
+                  <li><b>TXT 每行一个码</b><span>更适合自动发货工具逐条读取。</span></li>
+                  <li><b>兑换后立即失效</b><span>同一码并发提交也只成功一次。</span></li>
+                </ul>
+              </section>
+            </div>
+
+            <section class="invite-batch-card">
+              <div class="panel-head"><div><h3>最近批次</h3><p>这里只显示状态和数量，不保存或回显明文邀请码。</p></div></div>
+              <div v-if="adminInviteLoading && !adminInviteBatches.length" class="empty"><LoaderCircle class="spin" :size="18" />正在读取邀请码批次…</div>
+              <div v-else-if="!adminInviteBatches.length" class="empty">还没有邀请码批次。生成后会在这里显示记录。</div>
+              <div v-else class="invite-batch-table">
+                <div class="invite-batch-row head"><span>批次</span><span>等级</span><span>使用情况</span><span>有效期</span><span>状态</span></div>
+                <div v-for="batch in adminInviteBatches" :key="batch.id" class="invite-batch-row">
+                  <span><b>{{ batch.batchNo }}</b><small>{{ batch.note || '无备注' }} · {{ batch.exportFormat }}</small></span>
+                  <span><mark class="role-badge">{{ batch.targetRole }}</mark></span>
+                  <span><b>{{ batch.redeemedCount }} / {{ batch.totalCount }}</b><small>剩余 {{ batch.remainingCount }} 个</small></span>
+                  <span><b>{{ formatTime(batch.expiresAt) }}</b><small>生成于 {{ formatTime(batch.createdAt) }}</small></span>
+                  <span><mark class="invite-status" :class="inviteBatchStatusClass(batch)">{{ inviteBatchStatusText(batch) }}</mark></span>
+                </div>
+              </div>
+            </section>
           </section>
 
           <section v-else-if="adminTab === 'audit'" class="admin-section audit-section">
@@ -2376,6 +2589,37 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </template>
+
+        <div v-if="inviteRedeemDialog.visible" class="modal-mask" @click.self="closeInviteRedeemDialog">
+          <form class="modal invite-redeem-modal" role="dialog" aria-modal="true" aria-labelledby="invite-redeem-title" @submit.prevent="redeemInviteCode" @keydown.esc.stop="closeInviteRedeemDialog">
+            <header class="modal-head">
+              <div>
+                <span class="eyebrow">Membership</span>
+                <h3 id="invite-redeem-title">兑换会员邀请码</h3>
+                <p>兑换成功后立即获得对应权益，同一邀请码只能使用一次。</p>
+              </div>
+              <button type="button" class="soft" :disabled="inviteRedeemDialog.loading" aria-label="关闭邀请码兑换" @click="closeInviteRedeemDialog"><X :size="17" />关闭</button>
+            </header>
+            <div class="membership-levels" aria-label="会员等级说明">
+              <article><span>VIP</span><b>更大存储空间</b><small>适合课程资料与日常知识整理</small></article>
+              <article class="featured"><span>SVIP</span><b>最高等级权益</b><small>适合高频 AI 与大型资料库</small></article>
+            </div>
+            <label class="invite-code-field" for="invite-redeem-code">邀请码
+              <input id="invite-redeem-code" ref="inviteRedeemInput" v-model="inviteRedeemDialog.code" maxlength="96" autocomplete="off" autocapitalize="characters" spellcheck="false" :disabled="inviteRedeemDialog.loading" placeholder="CM-XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX" />
+            </label>
+            <p class="invite-privacy-tip"><ShieldCheck :size="17" />邀请码只在服务器中以哈希形式校验，不会写入浏览器地址或日志。</p>
+            <p v-if="inviteRedeemDialog.error" class="message inline danger" role="alert">{{ inviteRedeemDialog.error }}</p>
+            <p v-if="inviteRedeemDialog.success" class="message inline success" role="status">{{ inviteRedeemDialog.success }}</p>
+            <div class="actions right">
+              <button type="button" class="soft" :disabled="inviteRedeemDialog.loading" @click="closeInviteRedeemDialog">{{ inviteRedeemDialog.success ? '完成' : '取消' }}</button>
+              <button type="submit" :disabled="inviteRedeemDialog.loading || Boolean(inviteRedeemDialog.success)">
+                <LoaderCircle v-if="inviteRedeemDialog.loading" class="spin" :size="17" />
+                <Crown v-else :size="17" />
+                {{ inviteRedeemDialog.loading ? '正在兑换…' : '确认兑换' }}
+              </button>
+            </div>
+          </form>
+        </div>
 
         <div v-if="sessionDialog.visible" class="modal-mask" @click.self="closeSessionDialog">
           <section class="modal session-modal" role="dialog" aria-modal="true" aria-labelledby="session-dialog-title" aria-describedby="session-dialog-description" @keydown.esc.stop="closeSessionDialog">
