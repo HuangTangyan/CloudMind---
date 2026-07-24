@@ -1,11 +1,14 @@
 package com.cloudmind.demo.service;
 
 import com.cloudmind.demo.dto.CreateInviteBatchRequest;
+import com.cloudmind.demo.dto.RevokeInviteBatchRequest;
+import com.cloudmind.demo.dto.RevokeInviteCodeRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.entity.InviteCode;
 import com.cloudmind.demo.entity.InviteCodeBatch;
 import com.cloudmind.demo.repository.InviteCodeBatchRepository;
 import com.cloudmind.demo.repository.InviteCodeRepository;
+import com.cloudmind.demo.repository.AppUserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +19,8 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -32,29 +37,36 @@ public class InviteCodeService {
     private static final DateTimeFormatter BATCH_TIME =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
     private static final int RANDOM_CODE_LENGTH = 26;
+    private static final ZoneId CAMPUS_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final InviteCodeBatchRepository batchRepository;
     private final InviteCodeRepository codeRepository;
     private final AuthService authService;
+    private final AppUserRepository userRepository;
+    private final MembershipEntitlementService membershipEntitlementService;
+    private final InviteAuditService auditService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Value("${cloudmind.invites.max-batch-size:500}")
     private int maxBatchSize = 500;
 
-    @Value("${cloudmind.membership.vip-quota-bytes:53687091200}")
-    private long vipQuotaBytes = 50L * 1024 * 1024 * 1024;
-
-    @Value("${cloudmind.membership.svip-quota-bytes:214748364800}")
-    private long svipQuotaBytes = 200L * 1024 * 1024 * 1024;
+    @Value("${cloudmind.invites.daily-generation-limit:2000}")
+    private int dailyGenerationLimit = 2000;
 
     public InviteCodeService(
             InviteCodeBatchRepository batchRepository,
             InviteCodeRepository codeRepository,
-            AuthService authService
+            AuthService authService,
+            AppUserRepository userRepository,
+            MembershipEntitlementService membershipEntitlementService,
+            InviteAuditService auditService
     ) {
         this.batchRepository = batchRepository;
         this.codeRepository = codeRepository;
         this.authService = authService;
+        this.userRepository = userRepository;
+        this.membershipEntitlementService = membershipEntitlementService;
+        this.auditService = auditService;
     }
 
     @Transactional
@@ -63,71 +75,110 @@ public class InviteCodeService {
             CreateInviteBatchRequest request,
             String requestedFormat
     ) {
-        if (admin == null || !authService.isAdmin(admin)) {
-            throw new SecurityException("需要管理员权限");
-        }
-        String role = normalizeTargetRole(request.getRole());
-        String format = normalizeFormat(requestedFormat);
-        int configuredLimit = Math.max(1, Math.min(500, maxBatchSize));
-        if (request.getCount() < 1 || request.getCount() > configuredLimit) {
-            throw new IllegalArgumentException("单批邀请码数量应为 1-" + configuredLimit);
-        }
+        return createBatchExport(admin, request, requestedFormat, null, null);
+    }
 
-        Instant now = Instant.now();
-        Instant expiresAt = request.getExpiresAt();
-        if (expiresAt == null || !expiresAt.isAfter(now.plus(Duration.ofMinutes(5)))) {
-            throw new IllegalArgumentException("邀请码有效期至少应晚于当前时间 5 分钟");
-        }
-        if (expiresAt.isAfter(now.plus(Duration.ofDays(365)))) {
-            throw new IllegalArgumentException("邀请码有效期不能超过 365 天");
-        }
-
-        InviteCodeBatch batch = new InviteCodeBatch();
-        batch.setBatchNo(newBatchNo(now));
-        batch.setTargetRole(role);
-        batch.setTotalCount(request.getCount());
-        batch.setExpiresAt(expiresAt);
-        batch.setNote(normalizeNote(request.getNote()));
-        batch.setExportFormat(format.toUpperCase(Locale.ROOT));
-        batch.setCreatedBy(admin);
-        batch.setCreatedAt(now);
-        batch = batchRepository.save(batch);
-
-        List<String> plainCodes = new ArrayList<>(request.getCount());
-        List<InviteCode> storedCodes = new ArrayList<>(request.getCount());
-        Set<String> hashes = new HashSet<>();
-        while (plainCodes.size() < request.getCount()) {
-            String displayCode = generateDisplayCode();
-            String codeHash = hashCanonicalCode(canonicalCode(displayCode));
-            if (!hashes.add(codeHash) || codeRepository.existsByCodeHash(codeHash)) {
-                continue;
+    @Transactional
+    public InviteBatchExport createBatchExport(
+            AppUser admin,
+            CreateInviteBatchRequest request,
+            String requestedFormat,
+            String clientIp,
+            String userAgent
+    ) {
+        String role = null;
+        String batchNo = null;
+        try {
+            AppUser lockedAdmin = lockAdmin(admin);
+            authService.reauthenticateAdmin(lockedAdmin, request.getCurrentPassword());
+            role = normalizeTargetRole(request.getRole());
+            String format = normalizeFormat(requestedFormat);
+            int configuredLimit = Math.max(1, Math.min(500, maxBatchSize));
+            if (request.getCount() < 1 || request.getCount() > configuredLimit) {
+                throw new IllegalArgumentException("单批邀请码数量应为 1-" + configuredLimit);
             }
-            InviteCode code = new InviteCode();
-            code.setBatch(batch);
-            code.setCodeHash(codeHash);
-            code.setCreatedAt(now);
-            plainCodes.add(displayCode);
-            storedCodes.add(code);
-        }
-        codeRepository.saveAll(storedCodes);
 
-        byte[] content = "csv".equals(format)
-                ? csvContent(batch, plainCodes)
-                : txtContent(plainCodes);
-        String extension = "csv".equals(format) ? "csv" : "txt";
-        String contentType = "csv".equals(format)
-                ? "text/csv;charset=UTF-8"
-                : "text/plain;charset=UTF-8";
-        String filename = "cloudmind-" + role.toLowerCase(Locale.ROOT)
-                + "-" + batch.getBatchNo().toLowerCase(Locale.ROOT)
-                + "." + extension;
-        return new InviteBatchExport(
-                filename,
-                contentType,
-                content,
-                batch.getBatchNo(),
-                request.getCount()
-        );
+            Instant now = Instant.now();
+            Instant expiresAt = request.getExpiresAt();
+            if (expiresAt == null || !expiresAt.isAfter(now.plus(Duration.ofMinutes(5)))) {
+                throw new IllegalArgumentException("邀请码有效期至少应晚于当前时间 5 分钟");
+            }
+            if (expiresAt.isAfter(now.plus(Duration.ofDays(365)))) {
+                throw new IllegalArgumentException("邀请码有效期不能超过 365 天");
+            }
+            DailyWindow window = dailyWindow();
+            long alreadyGenerated = batchRepository.sumGeneratedByAdminBetween(
+                    lockedAdmin.getId(),
+                    window.start(),
+                    window.end()
+            );
+            int configuredDailyLimit = Math.max(1, dailyGenerationLimit);
+            if (alreadyGenerated + request.getCount() > configuredDailyLimit) {
+                throw new IllegalArgumentException(
+                        "今日邀请码生成量已达到安全上限，剩余可生成 "
+                                + Math.max(0L, configuredDailyLimit - alreadyGenerated) + " 个"
+                );
+            }
+
+            InviteCodeBatch batch = new InviteCodeBatch();
+            batchNo = newBatchNo(now);
+            batch.setBatchNo(batchNo);
+            batch.setTargetRole(role);
+            batch.setTotalCount(request.getCount());
+            batch.setExpiresAt(expiresAt);
+            batch.setNote(normalizeNote(request.getNote()));
+            batch.setExportFormat(format.toUpperCase(Locale.ROOT));
+            batch.setCreatedBy(lockedAdmin);
+            batch.setCreatedAt(now);
+            batch = batchRepository.save(batch);
+
+            List<String> plainCodes = new ArrayList<>(request.getCount());
+            List<InviteCode> storedCodes = new ArrayList<>(request.getCount());
+            Set<String> hashes = new HashSet<>();
+            while (plainCodes.size() < request.getCount()) {
+                String displayCode = generateDisplayCode();
+                String codeHash = hashCanonicalCode(canonicalCode(displayCode));
+                if (!hashes.add(codeHash) || codeRepository.existsByCodeHash(codeHash)) {
+                    continue;
+                }
+                InviteCode code = new InviteCode();
+                code.setBatch(batch);
+                code.setCodeHash(codeHash);
+                code.setCreatedAt(now);
+                plainCodes.add(displayCode);
+                storedCodes.add(code);
+            }
+            codeRepository.saveAll(storedCodes);
+
+            byte[] content = "csv".equals(format)
+                    ? csvContent(batch, plainCodes)
+                    : txtContent(plainCodes);
+            String extension = "csv".equals(format) ? "csv" : "txt";
+            String contentType = "csv".equals(format)
+                    ? "text/csv;charset=UTF-8"
+                    : "text/plain;charset=UTF-8";
+            String filename = "cloudmind-" + role.toLowerCase(Locale.ROOT)
+                    + "-" + batch.getBatchNo().toLowerCase(Locale.ROOT)
+                    + "." + extension;
+            auditService.record(
+                    lockedAdmin, "CREATE_EXPORT", batchNo, null, "SUCCESS",
+                    "生成 " + request.getCount() + " 个 " + role + " 邀请码",
+                    clientIp, userAgent
+            );
+            return new InviteBatchExport(
+                    filename,
+                    contentType,
+                    content,
+                    batch.getBatchNo(),
+                    request.getCount()
+            );
+        } catch (RuntimeException ex) {
+            auditService.record(
+                    admin, "CREATE_EXPORT", batchNo, null, "FAILED",
+                    safeAuditReason(ex), clientIp, userAgent
+            );
+            throw ex;
+        }
     }
 
     @Transactional(readOnly = true)
@@ -141,6 +192,120 @@ public class InviteCodeService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public Map<String, Object> status(AppUser admin) {
+        if (admin == null || !authService.isAdmin(admin)) {
+            throw new SecurityException("需要管理员权限");
+        }
+        DailyWindow window = dailyWindow();
+        long generated = batchRepository.sumGeneratedByAdminBetween(
+                admin.getId(),
+                window.start(),
+                window.end()
+        );
+        int limit = Math.max(1, dailyGenerationLimit);
+        return Map.of(
+                "date", window.date(),
+                "dailyGenerated", generated,
+                "dailyLimit", limit,
+                "dailyRemaining", Math.max(0L, limit - generated)
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> audit(AppUser admin) {
+        return auditService.recent(admin, authService);
+    }
+
+    @Transactional
+    public Map<String, Object> revokeCode(
+            AppUser admin,
+            RevokeInviteCodeRequest request,
+            String clientIp,
+            String userAgent
+    ) {
+        String fingerprint = null;
+        try {
+            AppUser lockedAdmin = lockAdmin(admin);
+            authService.reauthenticateAdmin(lockedAdmin, request.getCurrentPassword());
+            String codeHash = hashCanonicalCode(canonicalCode(request.getCode()));
+            fingerprint = fingerprint(codeHash);
+            InviteCode code = codeRepository.findForUpdateByCodeHash(codeHash)
+                    .orElseThrow(this::unavailableCode);
+            if (code.getRedeemedAt() != null || code.getRevokedAt() != null) {
+                throw unavailableCode();
+            }
+            Instant now = Instant.now();
+            String reason = requireReason(request.getReason());
+            code.setRevokedAt(now);
+            code.setRevokedBy(lockedAdmin);
+            code.setRevokeReason(reason);
+            codeRepository.save(code);
+            String batchNo = code.getBatch().getBatchNo();
+            auditService.record(
+                    lockedAdmin, "REVOKE_CODE", batchNo, fingerprint, "SUCCESS",
+                    reason, clientIp, userAgent
+            );
+            return Map.of(
+                    "batchNo", batchNo,
+                    "codeFingerprint", fingerprint,
+                    "revokedAt", now
+            );
+        } catch (RuntimeException ex) {
+            auditService.record(
+                    admin, "REVOKE_CODE", null, fingerprint, "FAILED",
+                    safeAuditReason(ex), clientIp, userAgent
+            );
+            throw ex;
+        }
+    }
+
+    @Transactional
+    public Map<String, Object> revokeBatch(
+            AppUser admin,
+            Long batchId,
+            RevokeInviteBatchRequest request,
+            String clientIp,
+            String userAgent
+    ) {
+        String batchNo = null;
+        try {
+            AppUser lockedAdmin = lockAdmin(admin);
+            authService.reauthenticateAdmin(lockedAdmin, request.getCurrentPassword());
+            InviteCodeBatch batch = batchRepository.findForUpdateById(batchId)
+                    .orElseThrow(() -> new IllegalArgumentException("邀请码批次不存在"));
+            batchNo = batch.getBatchNo();
+            if (batch.getRevokedAt() != null) {
+                throw new IllegalArgumentException("该邀请码批次已经撤销");
+            }
+            Instant now = Instant.now();
+            String reason = requireReason(request.getReason());
+            batch.setRevokedAt(now);
+            batch.setRevokedBy(lockedAdmin);
+            batch.setRevokeReason(reason);
+            batchRepository.save(batch);
+            int revokedCount = codeRepository.revokeUnusedByBatch(
+                    batch.getId(), now, lockedAdmin, reason
+            );
+            auditService.record(
+                    lockedAdmin, "REVOKE_BATCH", batchNo, null, "SUCCESS",
+                    reason + "；撤销未使用邀请码 " + revokedCount + " 个",
+                    clientIp, userAgent
+            );
+            return Map.of(
+                    "batchNo", batchNo,
+                    "revokedCount", revokedCount,
+                    "revokedAt", now
+            );
+        } catch (RuntimeException ex) {
+            auditService.record(
+                    admin, "REVOKE_BATCH", batchNo, null, "FAILED",
+                    safeAuditReason(ex), clientIp, userAgent
+            );
+            throw ex;
+        }
+    }
+
     @Transactional
     public Map<String, Object> redeem(String accessToken, String plainCode) {
         AppUser user = authService.requireUser(accessToken);
@@ -150,6 +315,8 @@ public class InviteCodeService {
         InviteCodeBatch batch = code.getBatch();
         Instant now = Instant.now();
         if (code.getRedeemedAt() != null
+                || code.getRevokedAt() != null
+                || batch.getRevokedAt() != null
                 || batch.getExpiresAt() == null
                 || !batch.getExpiresAt().isAfter(now)) {
             throw unavailableCode();
@@ -160,7 +327,7 @@ public class InviteCodeService {
             throw new IllegalArgumentException("当前会员等级无需使用该邀请码");
         }
 
-        long targetQuota = "SVIP".equals(targetRole) ? svipQuotaBytes : vipQuotaBytes;
+        long targetQuota = membershipEntitlementService.storageQuotaBytes(targetRole);
         Map<String, Object> session = authService.upgradeMembershipAndRotateSession(
                 accessToken,
                 user,
@@ -183,6 +350,9 @@ public class InviteCodeService {
         long redeemedCount = batch.getId() == null
                 ? 0L
                 : codeRepository.countByBatch_IdAndRedeemedAtIsNotNull(batch.getId());
+        long revokedCount = batch.getId() == null
+                ? 0L
+                : codeRepository.countByBatch_IdAndRevokedAtIsNotNull(batch.getId());
         int totalCount = batch.getTotalCount() == null ? 0 : batch.getTotalCount();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", batch.getId());
@@ -190,10 +360,13 @@ public class InviteCodeService {
         result.put("targetRole", batch.getTargetRole());
         result.put("totalCount", totalCount);
         result.put("redeemedCount", redeemedCount);
-        result.put("remainingCount", Math.max(0L, totalCount - redeemedCount));
-        result.put("status", batch.getExpiresAt() != null && batch.getExpiresAt().isAfter(now)
-                ? "ACTIVE"
-                : "EXPIRED");
+        result.put("revokedCount", revokedCount);
+        result.put("remainingCount", Math.max(0L, totalCount - redeemedCount - revokedCount));
+        result.put("status", batch.getRevokedAt() != null
+                ? "REVOKED"
+                : batch.getExpiresAt() != null && batch.getExpiresAt().isAfter(now)
+                    ? "ACTIVE"
+                    : "EXPIRED");
         result.put("expiresAt", batch.getExpiresAt());
         result.put("note", batch.getNote() == null ? "" : batch.getNote());
         result.put("exportFormat", batch.getExportFormat());
@@ -201,7 +374,51 @@ public class InviteCodeService {
         result.put("createdBy", batch.getCreatedBy() == null
                 ? "已删除账号"
                 : batch.getCreatedBy().getUsername());
+        result.put("revokedAt", batch.getRevokedAt());
+        result.put("revokeReason", batch.getRevokeReason() == null ? "" : batch.getRevokeReason());
         return result;
+    }
+
+    private AppUser lockAdmin(AppUser admin) {
+        if (admin == null || admin.getId() == null || !authService.isAdmin(admin)) {
+            throw new SecurityException("需要管理员权限");
+        }
+        AppUser locked = userRepository.findForUpdateById(admin.getId())
+                .orElseThrow(() -> new SecurityException("管理员账号不存在或已失效"));
+        if (!Boolean.TRUE.equals(locked.getEnabled()) || !authService.isAdmin(locked)) {
+            throw new SecurityException("管理员账号不存在或已失效");
+        }
+        return locked;
+    }
+
+    private DailyWindow dailyWindow() {
+        ZonedDateTime start = ZonedDateTime.now(CAMPUS_ZONE)
+                .toLocalDate()
+                .atStartOfDay(CAMPUS_ZONE);
+        return new DailyWindow(
+                start.toLocalDate().toString(),
+                start.toInstant(),
+                start.plusDays(1).toInstant()
+        );
+    }
+
+    private String requireReason(String reason) {
+        String value = normalizeNote(reason);
+        if (value.isBlank()) throw new IllegalArgumentException("撤销原因不能为空");
+        return value;
+    }
+
+    private String fingerprint(String codeHash) {
+        return codeHash == null || codeHash.length() < 12 ? "" : codeHash.substring(0, 12);
+    }
+
+    private String safeAuditReason(RuntimeException ex) {
+        String value = ex.getMessage();
+        if (value == null || value.isBlank()) return ex.getClass().getSimpleName();
+        value = value.replaceAll("[\\p{Cntrl}&&[^\\t]]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return value.length() <= 180 ? value : value.substring(0, 180);
     }
 
     private byte[] txtContent(List<String> plainCodes) {
@@ -317,4 +534,6 @@ public class InviteCodeService {
             String batchNo,
             int count
     ) {}
+
+    private record DailyWindow(String date, Instant start, Instant end) {}
 }

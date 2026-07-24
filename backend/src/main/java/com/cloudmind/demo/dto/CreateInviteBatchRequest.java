@@ -24,6 +24,10 @@ public class CreateInviteBatchRequest {
     @Size(max = 200, message = "批次备注不能超过 200 个字符")
     private String note;
 
+    @NotBlank(message = "请输入当前管理员密码")
+    @Size(max = 72, message = "管理员密码格式不正确")
+    private String currentPassword;
+
     public String getRole() {
         return role;
     }
@@ -54,5 +58,13 @@ public class CreateInviteBatchRequest {
 
     public void setNote(String note) {
         this.note = note;
+    }
+
+    public String getCurrentPassword() {
+        return currentPassword;
+    }
+
+    public void setCurrentPassword(String currentPassword) {
+        this.currentPassword = currentPassword;
     }
 }

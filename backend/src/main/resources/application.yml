@@ -25,6 +25,8 @@ spring:
       max-request-size: ${MAX_REQUEST_SIZE:100MB}
 
 cloudmind:
+  registration:
+    enabled: ${REGISTRATION_ENABLED:true}
   security:
     allowed-origins: ${CLOUDMIND_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
   minio:
@@ -37,8 +39,16 @@ cloudmind:
   membership:
     vip-quota-bytes: ${VIP_QUOTA_BYTES:53687091200}
     svip-quota-bytes: ${SVIP_QUOTA_BYTES:214748364800}
+    user-max-file-bytes: ${USER_MAX_FILE_BYTES:20971520}
+    vip-max-file-bytes: ${VIP_MAX_FILE_BYTES:52428800}
+    svip-max-file-bytes: ${SVIP_MAX_FILE_BYTES:104857600}
+    user-daily-ai: ${USER_DAILY_AI:10}
+    vip-daily-ai: ${VIP_DAILY_AI:50}
+    svip-daily-ai: ${SVIP_DAILY_AI:200}
+    admin-daily-ai: ${ADMIN_DAILY_AI:1000}
   invites:
     max-batch-size: ${INVITE_MAX_BATCH_SIZE:500}
+    daily-generation-limit: ${INVITE_DAILY_GENERATION_LIMIT:2000}
   ai:
     api-key: ${CLOUDMIND_AI_API_KEY:}
     require-environment-key: false

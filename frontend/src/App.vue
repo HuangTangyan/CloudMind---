@@ -58,6 +58,8 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const message = ref('')
 const loading = ref(false)
+const registrationEnabled = ref(false)
+const membershipEntitlements = ref(null)
 const sidebarOpen = ref(false)
 const items = ref([])
 const usedBytes = ref(0)
@@ -100,13 +102,29 @@ const adminUsers = ref([])
 const storageOverview = ref(null)
 const adminCreateForm = ref({ username: '', password: '', role: 'USER', quotaGb: 10 })
 const adminInviteBatches = ref([])
+const adminInviteStatus = ref(null)
+const adminInviteAudit = ref([])
 const adminInviteLoading = ref(false)
 const adminInviteForm = ref({
   role: 'VIP',
   count: 20,
   expiresAt: defaultInviteExpiry(),
   note: '校园内测',
-  format: 'txt'
+  format: 'txt',
+  currentPassword: ''
+})
+const adminInviteRevokeCodeForm = ref({
+  code: '',
+  reason: '人工撤销',
+  currentPassword: ''
+})
+const adminInviteRevokeDialog = ref({
+  visible: false,
+  batch: null,
+  reason: '批次停止发放',
+  currentPassword: '',
+  loading: false,
+  error: ''
 })
 const auditUsers = ref([])
 const auditItems = ref([])
@@ -576,6 +594,7 @@ function clearAuthState() {
   token.value = ''
   refreshToken.value = ''
   user.value = null
+  membershipEntitlements.value = null
   replaceItems([])
   releasePreviewObjectUrl()
   sessionStorage.removeItem('cloudmind-token')
@@ -583,6 +602,31 @@ function clearAuthState() {
   sessionStorage.removeItem('cloudmind-user')
   localStorage.removeItem('cloudmind-token')
   localStorage.removeItem('cloudmind-user')
+}
+
+async function loadAuthCapabilities() {
+  try {
+    const res = await request('/auth/capabilities', { skipAuthRefresh: true })
+    registrationEnabled.value = Boolean(res.data?.registrationEnabled)
+  } catch {
+    registrationEnabled.value = false
+  }
+}
+
+async function loadMembershipEntitlements(showError = false) {
+  if (!token.value || mustChangePassword.value) return
+  try {
+    const res = await request('/membership/me')
+    membershipEntitlements.value = res.data || null
+    if (res.data?.storageQuotaBytes) {
+      quotaBytes.value = Math.max(
+        Number(quotaBytes.value || 0),
+        Number(res.data.storageQuotaBytes || 0)
+      )
+    }
+  } catch (e) {
+    if (showError) setMessage(e.message)
+  }
 }
 
 async function refreshAccessToken() {
@@ -644,7 +688,9 @@ async function login() {
     applyAuthSession(res.data)
     setMessage('登录成功')
     password.value = ''
-    if (!mustChangePassword.value) await loadFiles(null, true)
+    if (!mustChangePassword.value) {
+      await Promise.all([loadFiles(null, true), loadMembershipEntitlements()])
+    }
   } catch (e) {
     setMessage(e.message)
   } finally {
@@ -653,6 +699,10 @@ async function login() {
 }
 
 async function register() {
+  if (!registrationEnabled.value) {
+    setMessage('校园内测期间不开放公开注册，请联系管理员获取测试账号')
+    return
+  }
   loading.value = true
   try {
     const res = await request('/auth/register', {
@@ -691,7 +741,7 @@ async function changePassword() {
     newPassword.value = ''
     confirmPassword.value = ''
     setMessage('密码已修改，请妥善保管新密码')
-    await loadFiles(null, true)
+    await Promise.all([loadFiles(null, true), loadMembershipEntitlements()])
   } catch (e) {
     setMessage(e.message)
   } finally {
@@ -1348,6 +1398,7 @@ async function askKnowledgeQuestion() {
       sources: res.data.sources || [],
       suggestions: res.data.suggestions || []
     })
+    await loadMembershipEntitlements()
   } catch (e) {
     knowledgeMessages.value.push({ role: 'assistant', content: '问答失败：' + e.message, error: true, sources: [] })
     setMessage(e.message)
@@ -1381,6 +1432,7 @@ async function generateKnowledgeOverview() {
       sources: res.data.sources || [],
       suggestions: res.data.suggestions || []
     })
+    await loadMembershipEntitlements()
   } catch (e) {
     knowledgeMessages.value.push({ role: 'assistant', content: '概述生成失败：' + e.message, error: true, sources: [] })
     setMessage(e.message)
@@ -1513,6 +1565,7 @@ async function redeemInviteCode() {
     dialog.code = ''
     dialog.success = `兑换成功，当前等级已升级为 ${res.data?.targetRole || user.value?.role || '会员'}。其他设备已安全退出。`
     setMessage('会员邀请码兑换成功')
+    await loadMembershipEntitlements()
   } catch (e) {
     dialog.error = e.message
   } finally {
@@ -1523,8 +1576,14 @@ async function redeemInviteCode() {
 async function loadAdminInviteBatches(showLoading = true) {
   if (showLoading) adminInviteLoading.value = true
   try {
-    const res = await request('/admin/invite-batches')
-    adminInviteBatches.value = Array.isArray(res.data) ? res.data : []
+    const [batchesRes, statusRes, auditRes] = await Promise.all([
+      request('/admin/invite-batches'),
+      request('/admin/invite-batches/status'),
+      request('/admin/invite-batches/audit')
+    ])
+    adminInviteBatches.value = Array.isArray(batchesRes.data) ? batchesRes.data : []
+    adminInviteStatus.value = statusRes.data || null
+    adminInviteAudit.value = Array.isArray(auditRes.data) ? auditRes.data : []
   } catch (e) {
     setMessage(e.message)
   } finally {
@@ -1533,10 +1592,12 @@ async function loadAdminInviteBatches(showLoading = true) {
 }
 
 function inviteBatchStatusText(batch) {
+  if (batch?.status === 'REVOKED') return '已撤销'
   return batch?.status === 'ACTIVE' ? '有效' : '已过期'
 }
 
 function inviteBatchStatusClass(batch) {
+  if (batch?.status === 'REVOKED') return 'revoked'
   return batch?.status === 'ACTIVE' ? 'active' : 'expired'
 }
 
@@ -1556,6 +1617,10 @@ async function generateInviteBatch() {
     setMessage('邀请码有效期至少应晚于当前时间 5 分钟')
     return
   }
+  if (!form.currentPassword) {
+    setMessage('请输入当前管理员密码，完成敏感操作二次验证')
+    return
+  }
   adminInviteLoading.value = true
   try {
     const response = await request(`/admin/invite-batches/export?format=${encodeURIComponent(form.format)}`, {
@@ -1565,7 +1630,8 @@ async function generateInviteBatch() {
         role: form.role,
         count,
         expiresAt: new Date(form.expiresAt).toISOString(),
-        note: String(form.note || '').trim()
+        note: String(form.note || '').trim(),
+        currentPassword: form.currentPassword
       })
     })
     const objectUrl = URL.createObjectURL(await response.blob())
@@ -1577,11 +1643,87 @@ async function generateInviteBatch() {
     anchor.remove()
     URL.revokeObjectURL(objectUrl)
     setMessage(`已生成 ${count} 个 ${form.role} 邀请码并下载 ${String(form.format).toUpperCase()} 文件`)
+    form.currentPassword = ''
     await loadAdminInviteBatches(false)
   } catch (e) {
     setMessage(e.message)
   } finally {
+    form.currentPassword = ''
     adminInviteLoading.value = false
+  }
+}
+
+async function revokeSingleInviteCode() {
+  const form = adminInviteRevokeCodeForm.value
+  if (!form.code.trim() || !form.reason.trim() || !form.currentPassword) {
+    setMessage('请填写邀请码、撤销原因和当前管理员密码')
+    return
+  }
+  adminInviteLoading.value = true
+  try {
+    await request('/admin/invite-batches/revoke-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: form.code.trim(),
+        reason: form.reason.trim(),
+        currentPassword: form.currentPassword
+      })
+    })
+    form.code = ''
+    form.currentPassword = ''
+    setMessage('指定邀请码已撤销，之后无法再兑换')
+    await loadAdminInviteBatches(false)
+  } catch (e) {
+    setMessage(e.message)
+  } finally {
+    form.currentPassword = ''
+    adminInviteLoading.value = false
+  }
+}
+
+function openInviteBatchRevokeDialog(batch) {
+  adminInviteRevokeDialog.value = {
+    visible: true,
+    batch,
+    reason: '批次停止发放',
+    currentPassword: '',
+    loading: false,
+    error: ''
+  }
+}
+
+function closeInviteBatchRevokeDialog() {
+  if (adminInviteRevokeDialog.value.loading) return
+  adminInviteRevokeDialog.value.visible = false
+}
+
+async function revokeInviteBatch() {
+  const dialog = adminInviteRevokeDialog.value
+  if (!dialog.reason.trim() || !dialog.currentPassword) {
+    dialog.error = '请填写撤销原因和当前管理员密码'
+    return
+  }
+  dialog.loading = true
+  dialog.error = ''
+  try {
+    const res = await request(`/admin/invite-batches/${dialog.batch.id}/revoke`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reason: dialog.reason.trim(),
+        currentPassword: dialog.currentPassword
+      })
+    })
+    setMessage(`批次 ${res.data?.batchNo || dialog.batch.batchNo} 已撤销 ${res.data?.revokedCount || 0} 个未使用邀请码`)
+    dialog.currentPassword = ''
+    dialog.visible = false
+    await loadAdminInviteBatches(false)
+  } catch (e) {
+    dialog.error = e.message
+  } finally {
+    dialog.currentPassword = ''
+    dialog.loading = false
   }
 }
 
@@ -1895,12 +2037,15 @@ async function adminAiReviewPending() {
 }
 
 onMounted(async () => {
+  await loadAuthCapabilities()
   if (token.value) {
     try {
       const res = await request('/auth/me')
       user.value = res.data
       sessionStorage.setItem('cloudmind-user', JSON.stringify(user.value))
-      if (!mustChangePassword.value) await loadFiles(null, true)
+      if (!mustChangePassword.value) {
+        await Promise.all([loadFiles(null, true), loadMembershipEntitlements()])
+      }
     } catch (e) {
       clearAuthState()
     }
@@ -1936,10 +2081,11 @@ onBeforeUnmount(() => {
         <input id="login-username" v-model="username" autocomplete="username" placeholder="请输入用户名" required />
         <label for="login-password">密码</label>
         <input id="login-password" v-model="password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
-        <div class="login-actions">
+        <div class="login-actions" :class="{ 'invite-only': !registrationEnabled }">
           <button type="submit" :disabled="loading">{{ loading ? '正在登录…' : '进入云盘' }}</button>
-          <button type="button" :disabled="loading" class="soft" @click="register">注册账号</button>
+          <button v-if="registrationEnabled" type="button" :disabled="loading" class="soft" @click="register">注册账号</button>
         </div>
+        <p v-if="!registrationEnabled" class="registration-note"><ShieldCheck :size="17" />校园内测仅开放受邀账号，请联系管理员开通。</p>
         <p v-if="message" class="message login-message" :class="{ danger: loginMessageIsBanned }" :role="loginMessageIsBanned ? 'alert' : 'status'">{{ message }}</p>
       </form>
     </section>
@@ -1999,9 +2145,13 @@ onBeforeUnmount(() => {
         </nav>
 
         <div class="side-storage-card" v-if="viewMode !== 'admin'">
-          <div class="side-title"><b>存储空间</b><span>已用 {{ usedPercent }}%</span></div>
+          <div class="side-title"><b>{{ membershipEntitlements?.role || user?.role || 'USER' }} 权益</b><span>已用 {{ usedPercent }}%</span></div>
           <div class="thin-bar"><i :style="{ width: usedPercent + '%' }"></i></div>
           <p>{{ formatSize(usedBytes) }} / {{ formatSize(quotaBytes) }}</p>
+          <dl v-if="membershipEntitlements" class="membership-facts">
+            <div><dt>单文件上限</dt><dd>{{ formatSize(membershipEntitlements.maxFileBytes) }}</dd></div>
+            <div><dt>今日 AI</dt><dd>剩余 {{ membershipEntitlements.dailyAiRemaining }} / {{ membershipEntitlements.dailyAiLimit }} 次</dd></div>
+          </dl>
           <div class="side-membership-actions">
             <button class="outline" @click="isAdmin ? openAdmin('invites') : openInviteRedeemDialog()"><Ticket :size="16" />{{ isAdmin ? '管理邀请码' : '兑换会员邀请码' }}</button>
             <button class="link" @click="isAdmin ? openAdmin('storage') : setMessage('没有邀请码时，请联系管理员')">{{ isAdmin ? '管理存储空间' : '联系管理员升级' }}</button>
@@ -2429,9 +2579,14 @@ onBeforeUnmount(() => {
               <div>
                 <span class="eyebrow">Membership invites</span>
                 <h2>会员邀请码</h2>
-                <p>批量生成一次性 VIP / SVIP 邀请码，并在生成时下载明文文件。</p>
+                <p>批量生成一次性 VIP / SVIP 邀请码；敏感操作必须再次验证管理员密码。</p>
               </div>
-              <button class="soft" :disabled="adminInviteLoading" @click="loadAdminInviteBatches">刷新批次</button>
+              <div class="head-actions">
+                <span v-if="adminInviteStatus" class="invite-daily-limit">
+                  今日已生成 <b>{{ adminInviteStatus.dailyGenerated }}</b> / {{ adminInviteStatus.dailyLimit }}
+                </span>
+                <button class="soft" :disabled="adminInviteLoading" @click="loadAdminInviteBatches">刷新记录</button>
+              </div>
             </div>
 
             <div class="invite-admin-grid">
@@ -2462,6 +2617,9 @@ onBeforeUnmount(() => {
                   <label class="invite-note-field">批次备注
                     <input v-model="adminInviteForm.note" maxlength="200" :disabled="adminInviteLoading" placeholder="例如：校园首轮内测" />
                   </label>
+                  <label class="invite-note-field">当前管理员密码
+                    <input v-model="adminInviteForm.currentPassword" type="password" maxlength="72" autocomplete="current-password" :disabled="adminInviteLoading" placeholder="用于确认本次生成与导出操作" />
+                  </label>
                 </div>
                 <div class="invite-export-notice">
                   <ShieldCheck :size="18" />
@@ -2482,8 +2640,25 @@ onBeforeUnmount(() => {
                   <li><b>设置合理有效期</b><span>短期活动建议 7–30 天。</span></li>
                   <li><b>TXT 每行一个码</b><span>更适合自动发货工具逐条读取。</span></li>
                   <li><b>兑换后立即失效</b><span>同一码并发提交也只成功一次。</span></li>
+                  <li><b>每日总量限制</b><span>避免误操作一次生成过多可售邀请码。</span></li>
                 </ul>
               </section>
+
+              <form class="invite-revoke-card" @submit.prevent="revokeSingleInviteCode">
+                <span class="eyebrow">Emergency revoke</span>
+                <h3>撤销单个邀请码</h3>
+                <p>适合邀请码误发或疑似泄露；已兑换的邀请码不能撤销。</p>
+                <label>邀请码
+                  <input v-model="adminInviteRevokeCodeForm.code" maxlength="96" autocomplete="off" autocapitalize="characters" spellcheck="false" :disabled="adminInviteLoading" placeholder="CM-XXXXX-XXXXX-XXXXX-XXXXX-XXXXXX" />
+                </label>
+                <label>撤销原因
+                  <input v-model="adminInviteRevokeCodeForm.reason" maxlength="200" :disabled="adminInviteLoading" />
+                </label>
+                <label>当前管理员密码
+                  <input v-model="adminInviteRevokeCodeForm.currentPassword" type="password" maxlength="72" autocomplete="current-password" :disabled="adminInviteLoading" />
+                </label>
+                <button class="danger" type="submit" :disabled="adminInviteLoading">确认撤销邀请码</button>
+              </form>
             </div>
 
             <section class="invite-batch-card">
@@ -2495,10 +2670,29 @@ onBeforeUnmount(() => {
                 <div v-for="batch in adminInviteBatches" :key="batch.id" class="invite-batch-row">
                   <span><b>{{ batch.batchNo }}</b><small>{{ batch.note || '无备注' }} · {{ batch.exportFormat }}</small></span>
                   <span><mark class="role-badge">{{ batch.targetRole }}</mark></span>
-                  <span><b>{{ batch.redeemedCount }} / {{ batch.totalCount }}</b><small>剩余 {{ batch.remainingCount }} 个</small></span>
+                  <span><b>已用 {{ batch.redeemedCount }} / {{ batch.totalCount }}</b><small>剩余 {{ batch.remainingCount }} 个 · 已撤销 {{ batch.revokedCount || 0 }} 个</small></span>
                   <span><b>{{ formatTime(batch.expiresAt) }}</b><small>生成于 {{ formatTime(batch.createdAt) }}</small></span>
-                  <span><mark class="invite-status" :class="inviteBatchStatusClass(batch)">{{ inviteBatchStatusText(batch) }}</mark></span>
+                  <span class="invite-row-status">
+                    <mark class="invite-status" :class="inviteBatchStatusClass(batch)">{{ inviteBatchStatusText(batch) }}</mark>
+                    <button v-if="batch.status === 'ACTIVE' && batch.remainingCount > 0" class="link danger-link" @click="openInviteBatchRevokeDialog(batch)">撤销批次</button>
+                    <small v-if="batch.revokeReason">{{ batch.revokeReason }}</small>
+                  </span>
                 </div>
+              </div>
+            </section>
+
+            <section class="invite-batch-card">
+              <div class="panel-head"><div><h3>最近安全操作</h3><p>只记录操作人、结果、时间和脱敏标识，不记录明文邀请码或管理员密码。</p></div></div>
+              <div v-if="!adminInviteAudit.length" class="empty">暂时没有邀请码安全操作记录。</div>
+              <div v-else class="invite-audit-list">
+                <article v-for="entry in adminInviteAudit.slice(0, 20)" :key="entry.id">
+                  <span class="audit-result" :class="String(entry.result).toLowerCase()">{{ entry.result === 'SUCCESS' ? '成功' : '失败' }}</span>
+                  <div>
+                    <b>{{ entry.actor }} · {{ entry.action }}</b>
+                    <p>{{ entry.batchNo || (entry.codeFingerprint ? `邀请码 #${entry.codeFingerprint}` : '未生成批次') }}</p>
+                    <small>{{ entry.reason || '无补充说明' }} · {{ formatTime(entry.createdAt) }}</small>
+                  </div>
+                </article>
               </div>
             </section>
           </section>
@@ -2589,6 +2783,34 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </template>
+
+        <div v-if="adminInviteRevokeDialog.visible" class="modal-mask" @click.self="closeInviteBatchRevokeDialog">
+          <form class="modal invite-revoke-modal" role="dialog" aria-modal="true" aria-labelledby="invite-revoke-title" @submit.prevent="revokeInviteBatch" @keydown.esc.stop="closeInviteBatchRevokeDialog">
+            <header class="modal-head">
+              <div>
+                <span class="eyebrow">Sensitive operation</span>
+                <h3 id="invite-revoke-title">撤销邀请码批次</h3>
+                <p>批次 {{ adminInviteRevokeDialog.batch?.batchNo }} 中尚未使用的邀请码将全部失效，已兑换会员不受影响。</p>
+              </div>
+              <button type="button" class="soft" :disabled="adminInviteRevokeDialog.loading" aria-label="关闭撤销批次窗口" @click="closeInviteBatchRevokeDialog"><X :size="17" />关闭</button>
+            </header>
+            <label>撤销原因
+              <input v-model="adminInviteRevokeDialog.reason" maxlength="200" :disabled="adminInviteRevokeDialog.loading" required />
+            </label>
+            <label>当前管理员密码
+              <input v-model="adminInviteRevokeDialog.currentPassword" type="password" maxlength="72" autocomplete="current-password" :disabled="adminInviteRevokeDialog.loading" required />
+            </label>
+            <p class="invite-privacy-tip"><ShieldCheck :size="17" />密码只用于本次身份验证，不会写入审计记录。</p>
+            <p v-if="adminInviteRevokeDialog.error" class="message inline danger" role="alert">{{ adminInviteRevokeDialog.error }}</p>
+            <div class="actions right">
+              <button type="button" class="soft" :disabled="adminInviteRevokeDialog.loading" @click="closeInviteBatchRevokeDialog">取消</button>
+              <button type="submit" class="danger" :disabled="adminInviteRevokeDialog.loading">
+                <LoaderCircle v-if="adminInviteRevokeDialog.loading" class="spin" :size="17" />
+                {{ adminInviteRevokeDialog.loading ? '正在撤销…' : '撤销所有未使用邀请码' }}
+              </button>
+            </div>
+          </form>
+        </div>
 
         <div v-if="inviteRedeemDialog.visible" class="modal-mask" @click.self="closeInviteRedeemDialog">
           <form class="modal invite-redeem-modal" role="dialog" aria-modal="true" aria-labelledby="invite-redeem-title" @submit.prevent="redeemInviteCode" @keydown.esc.stop="closeInviteRedeemDialog">

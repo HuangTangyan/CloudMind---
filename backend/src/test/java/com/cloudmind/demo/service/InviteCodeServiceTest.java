@@ -1,6 +1,8 @@
 package com.cloudmind.demo.service;
 
 import com.cloudmind.demo.dto.CreateInviteBatchRequest;
+import com.cloudmind.demo.dto.RevokeInviteBatchRequest;
+import com.cloudmind.demo.dto.RevokeInviteCodeRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.entity.InviteCode;
 import com.cloudmind.demo.entity.InviteCodeBatch;
@@ -8,6 +10,8 @@ import com.cloudmind.demo.repository.InviteCodeBatchRepository;
 import com.cloudmind.demo.repository.InviteCodeRepository;
 import com.cloudmind.demo.repository.AppUserRepository;
 import com.cloudmind.demo.repository.AuthTokenRepository;
+import com.cloudmind.demo.repository.AiDailyUsageRepository;
+import com.cloudmind.demo.repository.InviteAuditLogRepository;
 import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,23 +44,41 @@ class InviteCodeServiceTest {
     private InviteCodeBatchRepository batchRepository;
     private InviteCodeRepository codeRepository;
     private StubAuthService authService;
+    private AppUserRepository userRepository;
+    private InviteAuditLogRepository auditRepository;
     private InviteCodeService service;
 
     @BeforeEach
     void setUp() {
         batchRepository = mock(InviteCodeBatchRepository.class);
         codeRepository = mock(InviteCodeRepository.class);
+        userRepository = mock(AppUserRepository.class);
+        auditRepository = mock(InviteAuditLogRepository.class);
         authService = new StubAuthService();
-        service = new InviteCodeService(batchRepository, codeRepository, authService);
+        MembershipEntitlementService membershipEntitlementService =
+                new MembershipEntitlementService(
+                        userRepository,
+                        mock(AiDailyUsageRepository.class)
+                );
+        service = new InviteCodeService(
+                batchRepository,
+                codeRepository,
+                authService,
+                userRepository,
+                membershipEntitlementService,
+                new InviteAuditService(auditRepository)
+        );
         ReflectionTestUtils.setField(service, "maxBatchSize", 500);
-        ReflectionTestUtils.setField(service, "vipQuotaBytes", 50L * 1024 * 1024 * 1024);
-        ReflectionTestUtils.setField(service, "svipQuotaBytes", 200L * 1024 * 1024 * 1024);
+        ReflectionTestUtils.setField(service, "dailyGenerationLimit", 2000);
         when(batchRepository.save(any(InviteCodeBatch.class))).thenAnswer(invocation -> {
             InviteCodeBatch batch = invocation.getArgument(0);
             batch.setId(11L);
             return batch;
         });
         when(codeRepository.existsByCodeHash(anyString())).thenReturn(false);
+        when(batchRepository.sumGeneratedByAdminBetween(any(), any(), any())).thenReturn(0L);
+        when(userRepository.findForUpdateById(any())).thenAnswer(invocation ->
+                Optional.of(admin()));
     }
 
     @Test
@@ -171,6 +193,78 @@ class InviteCodeServiceTest {
     }
 
     @Test
+    void revokedCodeCannotBeConsumed() {
+        String plainCode = "CM-ABCDE-FGHJK-MNPQR-STUVW-XYZ234";
+        InviteCode inviteCode = inviteCode("VIP", Instant.now().plusSeconds(3600));
+        inviteCode.setRevokedAt(Instant.now());
+        authService.requiredUser = user("USER");
+        when(codeRepository.findForUpdateByCodeHash(hash(plainCode)))
+                .thenReturn(Optional.of(inviteCode));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.redeem("token", plainCode)
+        );
+        assertFalse(authService.upgradeCalled);
+    }
+
+    @Test
+    void dailyGenerationLimitRejectsExcessBeforeSavingBatch() {
+        ReflectionTestUtils.setField(service, "dailyGenerationLimit", 10);
+        when(batchRepository.sumGeneratedByAdminBetween(any(), any(), any()))
+                .thenReturn(9L);
+        CreateInviteBatchRequest request = batchRequest("VIP", 2);
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.createBatchExport(admin(), request, "txt")
+        );
+
+        assertTrue(error.getMessage().contains("安全上限"));
+    }
+
+    @Test
+    void administratorCanRevokeOneUnusedCodeWithReauthentication() {
+        String plainCode = "CM-ABCDE-FGHJK-MNPQR-STUVW-XYZ234";
+        InviteCode inviteCode = inviteCode("VIP", Instant.now().plusSeconds(3600));
+        when(codeRepository.findForUpdateByCodeHash(hash(plainCode)))
+                .thenReturn(Optional.of(inviteCode));
+        RevokeInviteCodeRequest request = new RevokeInviteCodeRequest();
+        request.setCode(plainCode);
+        request.setReason("疑似泄露");
+        request.setCurrentPassword("admin-password");
+
+        Map<String, Object> result = service.revokeCode(
+                admin(), request, "127.0.0.1", "JUnit"
+        );
+
+        assertNotNull(inviteCode.getRevokedAt());
+        assertEquals("疑似泄露", inviteCode.getRevokeReason());
+        assertEquals(12, String.valueOf(result.get("codeFingerprint")).length());
+        verify(codeRepository).save(inviteCode);
+    }
+
+    @Test
+    void administratorCanRevokeAllUnusedCodesInABatch() {
+        InviteCodeBatch batch = inviteCode("VIP", Instant.now().plusSeconds(3600)).getBatch();
+        when(batchRepository.findForUpdateById(batch.getId())).thenReturn(Optional.of(batch));
+        when(codeRepository.revokeUnusedByBatch(any(), any(), any(), anyString()))
+                .thenReturn(12);
+        RevokeInviteBatchRequest request = new RevokeInviteBatchRequest();
+        request.setReason("活动结束");
+        request.setCurrentPassword("admin-password");
+
+        Map<String, Object> result = service.revokeBatch(
+                admin(), batch.getId(), request, "127.0.0.1", "JUnit"
+        );
+
+        assertNotNull(batch.getRevokedAt());
+        assertEquals(12, result.get("revokedCount"));
+        assertEquals("活动结束", batch.getRevokeReason());
+        verify(batchRepository).save(batch);
+    }
+
+    @Test
     void repositoryAcquiresPessimisticWriteLockForConcurrentRedemptions()
             throws Exception {
         Lock lock = InviteCodeRepository.class
@@ -186,6 +280,7 @@ class InviteCodeServiceTest {
         request.setCount(count);
         request.setExpiresAt(Instant.now().plusSeconds(30L * 24 * 3600));
         request.setNote("校园内测");
+        request.setCurrentPassword("admin-password");
         return request;
     }
 
@@ -253,6 +348,13 @@ class InviteCodeServiceTest {
         @Override
         public boolean isAdmin(AppUser user) {
             return user != null && "ADMIN".equalsIgnoreCase(user.getRole());
+        }
+
+        @Override
+        public void reauthenticateAdmin(AppUser admin, String currentPassword) {
+            if (!"admin-password".equals(currentPassword)) {
+                throw new SecurityException("管理员身份验证失败");
+            }
         }
 
         @Override

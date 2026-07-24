@@ -28,19 +28,22 @@ public class FileService {
     private final TextAnalyzeService textAnalyzeService;
     private final UploadSecurityService uploadSecurityService;
     private final FileNameSecurityService fileNameSecurityService;
+    private final MembershipEntitlementService membershipEntitlementService;
 
     public FileService(CloudFileRepository fileRepository,
                        FileVersionRepository versionRepository,
                        MinioStorageService storageService,
                        TextAnalyzeService textAnalyzeService,
                        UploadSecurityService uploadSecurityService,
-                       FileNameSecurityService fileNameSecurityService) {
+                       FileNameSecurityService fileNameSecurityService,
+                       MembershipEntitlementService membershipEntitlementService) {
         this.fileRepository = fileRepository;
         this.versionRepository = versionRepository;
         this.storageService = storageService;
         this.textAnalyzeService = textAnalyzeService;
         this.uploadSecurityService = uploadSecurityService;
         this.fileNameSecurityService = fileNameSecurityService;
+        this.membershipEntitlementService = membershipEntitlementService;
     }
 
     public Map<String, Object> list(AppUser user, Long parentId) {
@@ -105,6 +108,7 @@ public class FileService {
             throw new IllegalArgumentException("上传文件不能为空");
         }
         if (parentId != null) requireFolder(user, parentId, false);
+        membershipEntitlementService.assertFileUploadAllowed(user, multipartFile.getSize());
         String originalName = cleanName(Optional.ofNullable(multipartFile.getOriginalFilename()).orElse("未命名文件"));
         UploadSecurityService.UploadInspection inspection =
                 uploadSecurityService.inspect(multipartFile, originalName);
@@ -121,6 +125,9 @@ public class FileService {
                 new ArrayList<>(Collections.nCopies(files.size(), null));
         for (int i = 0; i < files.size(); i++) {
             MultipartFile file = files.get(i);
+            if (file != null) {
+                membershipEntitlementService.assertFileUploadAllowed(user, file.getSize());
+            }
             if (file == null || file.isEmpty()) continue;
             String relativePath = relativePaths != null && i < relativePaths.size()
                     ? relativePaths.get(i)

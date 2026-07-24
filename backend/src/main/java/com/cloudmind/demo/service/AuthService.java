@@ -241,6 +241,15 @@ public class AuthService {
         return user != null && "ADMIN".equalsIgnoreCase(user.getRole());
     }
 
+    public void reauthenticateAdmin(AppUser admin, String currentPassword) {
+        if (!isAdmin(admin)
+                || currentPassword == null
+                || currentPassword.getBytes(StandardCharsets.UTF_8).length > 72
+                || !passwordMatches(admin, currentPassword)) {
+            throw new SecurityException("管理员身份验证失败");
+        }
+    }
+
     public Map<String, Object> toUserMap(AppUser user) {
         return Map.of(
                 "id", user.getId(),

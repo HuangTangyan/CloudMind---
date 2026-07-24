@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.TestPropertySource;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -33,6 +34,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(controllers = AuthController.class)
 @Import({SecurityConfig.class, SecurityWebLayerTest.TestBeans.class})
+@TestPropertySource(properties = "cloudmind.registration.enabled=false")
 class SecurityWebLayerTest {
     @Autowired
     private MockMvc mockMvc;
@@ -52,6 +54,25 @@ class SecurityWebLayerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void publicCapabilitiesExposeInviteOnlyMode() throws Exception {
+        mockMvc.perform(get("/api/auth/capabilities"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.registrationEnabled").value(false))
+                .andExpect(jsonPath("$.data.deploymentMode").value("CAMPUS_INVITE_ONLY"));
+    }
+
+    @Test
+    void inviteOnlyModeRejectsOtherwiseValidPublicRegistration() throws Exception {
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"student01","password":"safe-password"}
+                                """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
     }
 
     @Test

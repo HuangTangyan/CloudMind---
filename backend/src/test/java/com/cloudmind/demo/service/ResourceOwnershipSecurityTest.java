@@ -40,6 +40,7 @@ class ResourceOwnershipSecurityTest {
                 null,
                 null,
                 null,
+                null,
                 null
         );
         knowledgeQaService = new KnowledgeQaService(

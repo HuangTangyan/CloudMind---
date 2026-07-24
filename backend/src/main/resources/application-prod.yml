@@ -12,6 +12,8 @@ spring:
       ddl-auto: validate
 
 cloudmind:
+  registration:
+    enabled: ${REGISTRATION_ENABLED:false}
   security:
     allowed-origins: ${CLOUDMIND_ALLOWED_ORIGINS}
   minio:

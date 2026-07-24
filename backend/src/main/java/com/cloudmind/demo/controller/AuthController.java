@@ -8,6 +8,7 @@ import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -18,6 +19,9 @@ import java.util.Map;
 public class AuthController {
     private final AuthService authService;
 
+    @Value("${cloudmind.registration.enabled:true}")
+    private boolean registrationEnabled;
+
     public AuthController(AuthService authService) {
         this.authService = authService;
     }
@@ -27,6 +31,11 @@ public class AuthController {
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest servletRequest
     ) {
+        if (!registrationEnabled) {
+            throw new com.cloudmind.demo.service.RegistrationClosedException(
+                    "校园内测期间已关闭公开注册，请联系管理员获取测试账号"
+            );
+        }
         AppUser user = authService.register(request.getUsername(), request.getPassword());
         Map<String, Object> loginResult = authService.login(
                 user.getUsername(),
@@ -35,6 +44,17 @@ public class AuthController {
                 servletRequest.getHeader("User-Agent")
         );
         return Map.of("success", true, "message", "注册成功", "data", loginResult);
+    }
+
+    @GetMapping("/capabilities")
+    public Map<String, Object> capabilities() {
+        return Map.of(
+                "success", true,
+                "data", Map.of(
+                        "registrationEnabled", registrationEnabled,
+                        "deploymentMode", registrationEnabled ? "PUBLIC_REGISTRATION" : "CAMPUS_INVITE_ONLY"
+                )
+        );
     }
 
     @PostMapping("/login")

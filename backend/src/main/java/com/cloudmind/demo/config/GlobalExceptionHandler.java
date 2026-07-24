@@ -1,6 +1,7 @@
 package com.cloudmind.demo.config;
 
 import com.cloudmind.demo.service.LoginLockedException;
+import com.cloudmind.demo.service.RegistrationClosedException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +36,14 @@ public class GlobalExceptionHandler {
             HttpServletRequest request
     ) {
         return error(HttpStatus.UNAUTHORIZED, safeMessage(ex.getMessage(), "登录状态无效"), request);
+    }
+
+    @ExceptionHandler(RegistrationClosedException.class)
+    public ResponseEntity<Map<String, Object>> handleRegistrationClosed(
+            RegistrationClosedException ex,
+            HttpServletRequest request
+    ) {
+        return error(HttpStatus.FORBIDDEN, safeMessage(ex.getMessage(), "当前未开放公开注册"), request);
     }
 
     @ExceptionHandler(LoginLockedException.class)

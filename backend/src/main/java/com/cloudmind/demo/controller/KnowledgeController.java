@@ -4,6 +4,7 @@ import com.cloudmind.demo.dto.KnowledgeQuestionRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.service.AuthService;
 import com.cloudmind.demo.service.KnowledgeQaService;
+import com.cloudmind.demo.service.MembershipEntitlementService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -13,15 +14,22 @@ import java.util.Map;
 public class KnowledgeController {
     private final AuthService authService;
     private final KnowledgeQaService knowledgeQaService;
+    private final MembershipEntitlementService membershipEntitlementService;
 
-    public KnowledgeController(AuthService authService, KnowledgeQaService knowledgeQaService) {
+    public KnowledgeController(
+            AuthService authService,
+            KnowledgeQaService knowledgeQaService,
+            MembershipEntitlementService membershipEntitlementService
+    ) {
         this.authService = authService;
         this.knowledgeQaService = knowledgeQaService;
+        this.membershipEntitlementService = membershipEntitlementService;
     }
 
     @GetMapping("/sources")
     public Map<String, Object> sources(@RequestHeader(value = "X-Token", required = false) String token) {
         AppUser user = authService.requireUser(token);
+        membershipEntitlementService.consumeAiRequest(user);
         return Map.of(
                 "success", true,
                 "data", knowledgeQaService.sources(user)
@@ -32,6 +40,7 @@ public class KnowledgeController {
     public Map<String, Object> ask(@RequestHeader(value = "X-Token", required = false) String token,
                                    @RequestBody KnowledgeQuestionRequest request) {
         AppUser user = authService.requireUser(token);
+        membershipEntitlementService.consumeAiRequest(user);
         return Map.of(
                 "success", true,
                 "message", "知识库问答完成",

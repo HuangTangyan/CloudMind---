@@ -49,6 +49,16 @@ public class InviteCodeBatch {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "revoked_by_id")
+    private AppUser revokedBy;
+
+    @Column(name = "revoked_at")
+    private Instant revokedAt;
+
+    @Column(name = "revoke_reason", length = 200)
+    private String revokeReason;
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) createdAt = Instant.now();
@@ -72,4 +82,10 @@ public class InviteCodeBatch {
     public void setCreatedBy(AppUser createdBy) { this.createdBy = createdBy; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public AppUser getRevokedBy() { return revokedBy; }
+    public void setRevokedBy(AppUser revokedBy) { this.revokedBy = revokedBy; }
+    public Instant getRevokedAt() { return revokedAt; }
+    public void setRevokedAt(Instant revokedAt) { this.revokedAt = revokedAt; }
+    public String getRevokeReason() { return revokeReason; }
+    public void setRevokeReason(String revokeReason) { this.revokeReason = revokeReason; }
 }
