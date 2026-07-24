@@ -108,6 +108,7 @@ const adminInviteLoading = ref(false)
 const adminInviteForm = ref({
   role: 'VIP',
   count: 20,
+  membershipDays: 30,
   expiresAt: defaultInviteExpiry(),
   note: '校园内测',
   format: 'txt',
@@ -387,6 +388,11 @@ function storageStatusLabel(status) {
 function formatTime(value) {
   if (!value) return '-'
   return new Date(value).toLocaleString()
+}
+
+function membershipPeriodText(value) {
+  const days = Number(value)
+  return Number.isInteger(days) && days > 0 ? `${days} 天` : '期限未知'
 }
 
 function formatDate(value) {
@@ -1563,7 +1569,10 @@ async function redeemInviteCode() {
     applyAuthSession(res.data?.session)
     quotaBytes.value = Number(user.value?.quotaBytes || quotaBytes.value || 0)
     dialog.code = ''
-    dialog.success = `兑换成功，当前等级已升级为 ${res.data?.targetRole || user.value?.role || '会员'}。其他设备已安全退出。`
+    const expiryText = res.data?.membershipExpiresAt
+      ? `，有效期至 ${formatTime(res.data.membershipExpiresAt)}`
+      : ''
+    dialog.success = `兑换成功，当前等级为 ${res.data?.targetRole || user.value?.role || '会员'}${expiryText}。其他设备已安全退出。`
     setMessage('会员邀请码兑换成功')
     await loadMembershipEntitlements()
   } catch (e) {
@@ -1601,9 +1610,9 @@ function inviteBatchStatusClass(batch) {
   return batch?.status === 'ACTIVE' ? 'active' : 'expired'
 }
 
-function inviteDownloadName(format, role) {
+function inviteDownloadName(format, role, membershipDays) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `cloudmind-${String(role || 'vip').toLowerCase()}-${stamp}.${format}`
+  return `cloudmind-${String(role || 'vip').toLowerCase()}-${Number(membershipDays) || 30}d-${stamp}.${format}`
 }
 
 async function generateInviteBatch() {
@@ -1611,6 +1620,11 @@ async function generateInviteBatch() {
   const count = Number(form.count)
   if (!Number.isInteger(count) || count < 1 || count > 500) {
     setMessage('单批生成数量应为 1-500')
+    return
+  }
+  const membershipDays = Number(form.membershipDays)
+  if (!Number.isInteger(membershipDays) || membershipDays < 1 || membershipDays > 365) {
+    setMessage('会员权益期限应为 1-365 天')
     return
   }
   if (!form.expiresAt || new Date(form.expiresAt).getTime() <= Date.now() + 5 * 60 * 1000) {
@@ -1629,6 +1643,7 @@ async function generateInviteBatch() {
       body: JSON.stringify({
         role: form.role,
         count,
+        membershipDays,
         expiresAt: new Date(form.expiresAt).toISOString(),
         note: String(form.note || '').trim(),
         currentPassword: form.currentPassword
@@ -1637,12 +1652,12 @@ async function generateInviteBatch() {
     const objectUrl = URL.createObjectURL(await response.blob())
     const anchor = document.createElement('a')
     anchor.href = objectUrl
-    anchor.download = inviteDownloadName(form.format, form.role)
+    anchor.download = inviteDownloadName(form.format, form.role, membershipDays)
     document.body.appendChild(anchor)
     anchor.click()
     anchor.remove()
     URL.revokeObjectURL(objectUrl)
-    setMessage(`已生成 ${count} 个 ${form.role} 邀请码并下载 ${String(form.format).toUpperCase()} 文件`)
+    setMessage(`已生成 ${count} 个 ${form.role} · ${membershipDays} 天邀请码并下载 ${String(form.format).toUpperCase()} 文件`)
     form.currentPassword = ''
     await loadAdminInviteBatches(false)
   } catch (e) {
@@ -2149,6 +2164,7 @@ onBeforeUnmount(() => {
           <div class="thin-bar"><i :style="{ width: usedPercent + '%' }"></i></div>
           <p>{{ formatSize(usedBytes) }} / {{ formatSize(quotaBytes) }}</p>
           <dl v-if="membershipEntitlements" class="membership-facts">
+            <div v-if="['VIP', 'SVIP'].includes(membershipEntitlements.role)"><dt>会员有效期</dt><dd>{{ membershipEntitlements.membershipExpiresAt ? formatTime(membershipEntitlements.membershipExpiresAt) : '长期有效' }}</dd></div>
             <div><dt>单文件上限</dt><dd>{{ formatSize(membershipEntitlements.maxFileBytes) }}</dd></div>
             <div><dt>今日 AI</dt><dd>剩余 {{ membershipEntitlements.dailyAiRemaining }} / {{ membershipEntitlements.dailyAiLimit }} 次</dd></div>
           </dl>
@@ -2579,7 +2595,7 @@ onBeforeUnmount(() => {
               <div>
                 <span class="eyebrow">Membership invites</span>
                 <h2>会员邀请码</h2>
-                <p>批量生成一次性 VIP / SVIP 邀请码；敏感操作必须再次验证管理员密码。</p>
+                <p>批量生成一次性、定期限的 VIP / SVIP 邀请码；敏感操作必须再次验证管理员密码。</p>
               </div>
               <div class="head-actions">
                 <span v-if="adminInviteStatus" class="invite-daily-limit">
@@ -2605,7 +2621,16 @@ onBeforeUnmount(() => {
                   <label>生成数量
                     <input v-model.number="adminInviteForm.count" type="number" min="1" max="500" step="1" :disabled="adminInviteLoading" />
                   </label>
-                  <label>有效期
+                  <label>会员权益期限
+                    <select v-model.number="adminInviteForm.membershipDays" :disabled="adminInviteLoading">
+                      <option :value="7">7 天体验</option>
+                      <option :value="30">30 天月卡</option>
+                      <option :value="90">90 天季卡</option>
+                      <option :value="180">180 天学期卡</option>
+                      <option :value="365">365 天年卡</option>
+                    </select>
+                  </label>
+                  <label>邀请码有效期
                     <input v-model="adminInviteForm.expiresAt" type="datetime-local" :disabled="adminInviteLoading" />
                   </label>
                   <label>导出格式
@@ -2637,7 +2662,7 @@ onBeforeUnmount(() => {
                 <h3>发货前检查</h3>
                 <ul>
                   <li><b>VIP 与 SVIP 分开批次</b><span>避免上架时选错权益。</span></li>
-                  <li><b>设置合理有效期</b><span>短期活动建议 7–30 天。</span></li>
+                  <li><b>区分两种有效期</b><span>邀请码截止后不能兑换；会员期限从成功兑换时开始计算。</span></li>
                   <li><b>TXT 每行一个码</b><span>更适合自动发货工具逐条读取。</span></li>
                   <li><b>兑换后立即失效</b><span>同一码并发提交也只成功一次。</span></li>
                   <li><b>每日总量限制</b><span>避免误操作一次生成过多可售邀请码。</span></li>
@@ -2666,12 +2691,12 @@ onBeforeUnmount(() => {
               <div v-if="adminInviteLoading && !adminInviteBatches.length" class="empty"><LoaderCircle class="spin" :size="18" />正在读取邀请码批次…</div>
               <div v-else-if="!adminInviteBatches.length" class="empty">还没有邀请码批次。生成后会在这里显示记录。</div>
               <div v-else class="invite-batch-table">
-                <div class="invite-batch-row head"><span>批次</span><span>等级</span><span>使用情况</span><span>有效期</span><span>状态</span></div>
+                <div class="invite-batch-row head"><span>批次</span><span>等级</span><span>使用情况</span><span>邀请码截止</span><span>状态</span></div>
                 <div v-for="batch in adminInviteBatches" :key="batch.id" class="invite-batch-row">
                   <span><b>{{ batch.batchNo }}</b><small>{{ batch.note || '无备注' }} · {{ batch.exportFormat }}</small></span>
-                  <span><mark class="role-badge">{{ batch.targetRole }}</mark></span>
+                  <span><mark class="role-badge">{{ batch.targetRole }}</mark><small>{{ membershipPeriodText(batch.membershipDays) }}权益</small></span>
                   <span><b>已用 {{ batch.redeemedCount }} / {{ batch.totalCount }}</b><small>剩余 {{ batch.remainingCount }} 个 · 已撤销 {{ batch.revokedCount || 0 }} 个</small></span>
-                  <span><b>{{ formatTime(batch.expiresAt) }}</b><small>生成于 {{ formatTime(batch.createdAt) }}</small></span>
+                  <span><b>{{ formatTime(batch.expiresAt) }}</b><small>会员期 {{ membershipPeriodText(batch.membershipDays) }} · 生成于 {{ formatTime(batch.createdAt) }}</small></span>
                   <span class="invite-row-status">
                     <mark class="invite-status" :class="inviteBatchStatusClass(batch)">{{ inviteBatchStatusText(batch) }}</mark>
                     <button v-if="batch.status === 'ACTIVE' && batch.remainingCount > 0" class="link danger-link" @click="openInviteBatchRevokeDialog(batch)">撤销批次</button>
@@ -2818,7 +2843,7 @@ onBeforeUnmount(() => {
               <div>
                 <span class="eyebrow">Membership</span>
                 <h3 id="invite-redeem-title">兑换会员邀请码</h3>
-                <p>兑换成功后立即获得对应权益，同一邀请码只能使用一次。</p>
+                <p>兑换成功后立即获得对应期限权益，同一邀请码只能使用一次；同等级兑换会顺延有效期。</p>
               </div>
               <button type="button" class="soft" :disabled="inviteRedeemDialog.loading" aria-label="关闭邀请码兑换" @click="closeInviteRedeemDialog"><X :size="17" />关闭</button>
             </header>

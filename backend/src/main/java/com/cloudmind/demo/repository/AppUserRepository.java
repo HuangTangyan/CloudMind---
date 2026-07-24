@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
+import java.time.Instant;
+import java.util.List;
 
 public interface AppUserRepository extends JpaRepository<AppUser, Long> {
     Optional<AppUser> findByUsername(String username);
@@ -16,4 +18,9 @@ public interface AppUserRepository extends JpaRepository<AppUser, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select user from AppUser user where user.id = :id")
     Optional<AppUser> findForUpdateById(@Param("id") Long id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    List<AppUser> findTop200ByMembershipExpiresAtLessThanEqualOrderByMembershipExpiresAtAsc(
+            Instant now
+    );
 }

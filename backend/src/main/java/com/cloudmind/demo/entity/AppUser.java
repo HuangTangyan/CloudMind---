@@ -22,6 +22,15 @@ public class AppUser {
     @Column(nullable = false, length = 20)
     private String role = "USER";
 
+    @Column(name = "membership_expires_at")
+    private Instant membershipExpiresAt;
+
+    @Column(name = "membership_fallback_role", length = 20)
+    private String membershipFallbackRole;
+
+    @Column(name = "membership_fallback_quota_bytes")
+    private Long membershipFallbackQuotaBytes;
+
     @Column(nullable = false)
     private Boolean enabled = true;
 
@@ -57,6 +66,12 @@ public class AppUser {
     public void setSalt(String salt) { this.salt = salt; }
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+    public Instant getMembershipExpiresAt() { return membershipExpiresAt; }
+    public void setMembershipExpiresAt(Instant membershipExpiresAt) { this.membershipExpiresAt = membershipExpiresAt; }
+    public String getMembershipFallbackRole() { return membershipFallbackRole; }
+    public void setMembershipFallbackRole(String membershipFallbackRole) { this.membershipFallbackRole = membershipFallbackRole; }
+    public Long getMembershipFallbackQuotaBytes() { return membershipFallbackQuotaBytes; }
+    public void setMembershipFallbackQuotaBytes(Long membershipFallbackQuotaBytes) { this.membershipFallbackQuotaBytes = membershipFallbackQuotaBytes; }
     public Boolean getEnabled() { return enabled; }
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     public Long getQuotaBytes() { return quotaBytes; }

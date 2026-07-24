@@ -113,6 +113,7 @@ public class AuthService {
             user.setPasswordHash(passwordEncoder.encode(password));
             user.setSalt("");
         }
+        normalizeExpiredMembership(user, now);
         userRepository.save(user);
         return issueSession(user, UUID.randomUUID().toString(), clientIp, userAgent);
     }
@@ -139,6 +140,9 @@ public class AuthService {
             throw new SecurityException("账号已被禁用");
         }
         Instant usedAt = Instant.now();
+        if (normalizeExpiredMembership(user, usedAt)) {
+            userRepository.save(user);
+        }
         if (storedToken.getId() != null) {
             authTokenRepository.touchLastUsed(
                     storedToken.getId(),
@@ -177,7 +181,11 @@ public class AuthService {
             authTokenRepository.revokeFamily(storedToken.getFamilyId(), Instant.now());
             throw new SecurityException("账号已被禁用");
         }
-        authTokenRepository.revokeFamily(storedToken.getFamilyId(), Instant.now());
+        Instant now = Instant.now();
+        if (normalizeExpiredMembership(user, now)) {
+            userRepository.save(user);
+        }
+        authTokenRepository.revokeFamily(storedToken.getFamilyId(), now);
         String resolvedIp = clientIp == null || clientIp.isBlank()
                 ? storedToken.getClientIp()
                 : clientIp;
@@ -251,15 +259,17 @@ public class AuthService {
     }
 
     public Map<String, Object> toUserMap(AppUser user) {
-        return Map.of(
-                "id", user.getId(),
-                "username", user.getUsername(),
-                "role", user.getRole(),
-                "permissionLevel", user.getRole(),
-                "quotaBytes", user.getQuotaBytes(),
-                "enabled", user.getEnabled(),
-                "mustChangePassword", user.getPasswordChangedAt() == null
-        );
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", user.getId());
+        result.put("username", user.getUsername());
+        result.put("role", user.getRole());
+        result.put("permissionLevel", user.getRole());
+        result.put("quotaBytes", user.getQuotaBytes());
+        result.put("enabled", user.getEnabled());
+        result.put("mustChangePassword", user.getPasswordChangedAt() == null);
+        result.put("membershipExpiresAt", user.getMembershipExpiresAt());
+        result.put("membershipFallbackRole", user.getMembershipFallbackRole());
+        return result;
     }
 
     @Transactional
@@ -330,6 +340,7 @@ public class AuthService {
                 user.setRole(normalizedRole);
                 revokeTokens(user.getId());
             }
+            clearTemporaryMembership(user);
         }
         if (quotaBytes != null) user.setQuotaBytes(normalizeQuota(quotaBytes));
         return userRepository.save(user);
@@ -342,6 +353,23 @@ public class AuthService {
             String targetRole,
             long targetQuotaBytes
     ) {
+        return upgradeMembershipAndRotateSession(
+                accessToken,
+                user,
+                targetRole,
+                targetQuotaBytes,
+                30
+        );
+    }
+
+    @Transactional
+    public Map<String, Object> upgradeMembershipAndRotateSession(
+            String accessToken,
+            AppUser user,
+            String targetRole,
+            long targetQuotaBytes,
+            int membershipDays
+    ) {
         AuthToken currentToken = requireStoredAccessToken(accessToken);
         if (user == null
                 || user.getId() == null
@@ -350,26 +378,50 @@ public class AuthService {
             throw new SecurityException("登录状态与兑换账号不匹配");
         }
 
+        AppUser lockedUser = userRepository.findForUpdateById(user.getId())
+                .orElseThrow(() -> new SecurityException("兑换账号不存在或已失效"));
+        if (!Boolean.TRUE.equals(lockedUser.getEnabled())) {
+            throw new SecurityException("兑换账号不存在或已失效");
+        }
+        Instant now = Instant.now();
+        normalizeExpiredMembership(lockedUser, now);
+
         String normalizedRole = normalizeRole(targetRole);
         if (!"VIP".equals(normalizedRole) && !"SVIP".equals(normalizedRole)) {
             throw new IllegalArgumentException("邀请码只能升级为 VIP 或 SVIP");
         }
-        if (membershipRank(user.getRole()) >= membershipRank(normalizedRole)) {
+        if (membershipDays < 1 || membershipDays > 365) {
+            throw new IllegalArgumentException("会员期限应为 1-365 天");
+        }
+
+        int currentRank = membershipRank(lockedUser.getRole());
+        int targetRank = membershipRank(normalizedRole);
+        boolean temporaryMembership = lockedUser.getMembershipExpiresAt() != null
+                && lockedUser.getMembershipExpiresAt().isAfter(now);
+        if (currentRank > targetRank || currentRank == targetRank && !temporaryMembership) {
             throw new IllegalArgumentException("当前会员等级无需使用该邀请码");
         }
 
         String clientIp = currentToken.getClientIp();
         String userAgent = currentToken.getUserAgent();
-        user.setRole(normalizedRole);
-        user.setQuotaBytes(Math.max(
-                user.getQuotaBytes() == null ? 0L : user.getQuotaBytes(),
+        if (!temporaryMembership) {
+            lockedUser.setMembershipFallbackRole(normalizeRole(lockedUser.getRole()));
+            lockedUser.setMembershipFallbackQuotaBytes(lockedUser.getQuotaBytes());
+        }
+        Instant extensionBase = temporaryMembership
+                ? lockedUser.getMembershipExpiresAt()
+                : now;
+        lockedUser.setRole(normalizedRole);
+        lockedUser.setMembershipExpiresAt(extensionBase.plus(Duration.ofDays(membershipDays)));
+        lockedUser.setQuotaBytes(Math.max(
+                lockedUser.getQuotaBytes() == null ? 0L : lockedUser.getQuotaBytes(),
                 normalizeQuota(targetQuotaBytes)
         ));
-        userRepository.save(user);
+        userRepository.save(lockedUser);
 
-        revokeTokens(user.getId());
+        revokeTokens(lockedUser.getId());
         return issueSession(
-                user,
+                lockedUser,
                 UUID.randomUUID().toString(),
                 clientIp,
                 userAgent
@@ -489,6 +541,20 @@ public class AuthService {
     public void cleanupTokens() {
         Instant now = Instant.now();
         authTokenRepository.deleteExpiredOrOldRevoked(now, now.minus(Duration.ofDays(1)));
+    }
+
+    @Scheduled(fixedDelayString = "${cloudmind.membership.expiry-cleanup-interval-ms:3600000}")
+    @Transactional
+    public void cleanupExpiredMemberships() {
+        Instant now = Instant.now();
+        List<AppUser> expiredUsers =
+                userRepository.findTop200ByMembershipExpiresAtLessThanEqualOrderByMembershipExpiresAtAsc(now);
+        for (AppUser user : expiredUsers) {
+            normalizeExpiredMembership(user, now);
+        }
+        if (!expiredUsers.isEmpty()) {
+            userRepository.saveAll(expiredUsers);
+        }
     }
 
     private AuthToken newToken(
@@ -649,6 +715,34 @@ public class AuthService {
             case "ADMIN" -> 3;
             default -> 0;
         };
+    }
+
+    private boolean normalizeExpiredMembership(AppUser user, Instant now) {
+        if (user == null
+                || isAdmin(user)
+                || user.getMembershipExpiresAt() == null
+                || user.getMembershipExpiresAt().isAfter(now)) {
+            return false;
+        }
+        String fallbackRole = normalizeMembershipFallbackRole(user.getMembershipFallbackRole());
+        long fallbackQuota = user.getMembershipFallbackQuotaBytes() == null
+                ? defaultQuotaBytes
+                : normalizeQuota(user.getMembershipFallbackQuotaBytes());
+        user.setRole(fallbackRole);
+        user.setQuotaBytes(fallbackQuota);
+        clearTemporaryMembership(user);
+        return true;
+    }
+
+    private String normalizeMembershipFallbackRole(String role) {
+        String normalized = normalizeRole(role);
+        return "ADMIN".equals(normalized) ? "USER" : normalized;
+    }
+
+    private void clearTemporaryMembership(AppUser user) {
+        user.setMembershipExpiresAt(null);
+        user.setMembershipFallbackRole(null);
+        user.setMembershipFallbackQuotaBytes(null);
     }
 
     private long normalizeQuota(Long quotaBytes) {

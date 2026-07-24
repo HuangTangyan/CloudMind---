@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -62,22 +63,27 @@ public class MembershipEntitlementService {
     @Transactional(readOnly = true)
     public Map<String, Object> summary(AppUser user) {
         requireUsableUser(user);
-        Policy policy = policyFor(user.getRole());
+        Instant now = Instant.now();
+        String effectiveRole = effectiveRole(user, now);
+        Policy policy = policyFor(effectiveRole);
         LocalDate date = LocalDate.now(CAMPUS_ZONE);
         int used = usageRepository.findByUser_IdAndUsageDate(user.getId(), date)
                 .map(AiDailyUsage::getUsedCount)
                 .orElse(0);
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("role", normalizeRole(user.getRole()));
-        result.put("storageQuotaBytes", Math.max(
-                user.getQuotaBytes() == null ? 0L : user.getQuotaBytes(),
-                policy.storageQuotaBytes()
-        ));
+        result.put("role", effectiveRole);
+        result.put("storageQuotaBytes", effectiveQuotaBytes(user, policy, now));
         result.put("maxFileBytes", policy.maxFileBytes());
         result.put("dailyAiLimit", policy.dailyAiLimit());
         result.put("dailyAiUsed", used);
         result.put("dailyAiRemaining", Math.max(0, policy.dailyAiLimit() - used));
         result.put("usageDate", date.toString());
+        result.put("membershipExpiresAt", activeTemporaryMembership(user, now)
+                ? user.getMembershipExpiresAt()
+                : null);
+        result.put("membershipStatus", activeTemporaryMembership(user, now)
+                ? "TEMPORARY"
+                : membershipRank(effectiveRole) > 0 ? "PERMANENT" : "STANDARD");
         return result;
     }
 
@@ -95,7 +101,7 @@ public class MembershipEntitlementService {
 
     public void assertFileUploadAllowed(AppUser user, long sizeBytes) {
         requireUsableUser(user);
-        long limit = maxFileBytes(user.getRole());
+        long limit = maxFileBytes(effectiveRole(user, Instant.now()));
         if (sizeBytes < 0 || sizeBytes > limit) {
             throw new IllegalArgumentException(
                     "当前会员等级单文件上限为 " + humanSize(limit) + "，请压缩文件或升级会员"
@@ -109,7 +115,7 @@ public class MembershipEntitlementService {
         AppUser user = userRepository.findForUpdateById(sessionUser.getId())
                 .orElseThrow(() -> new SecurityException("账号不存在或已失效"));
         requireUsableUser(user);
-        Policy policy = policyFor(user.getRole());
+        Policy policy = policyFor(effectiveRole(user, Instant.now()));
         LocalDate date = LocalDate.now(CAMPUS_ZONE);
         AiDailyUsage usage = usageRepository.findByUser_IdAndUsageDate(user.getId(), date)
                 .orElseGet(() -> {
@@ -162,6 +168,42 @@ public class MembershipEntitlementService {
 
     private String normalizeRole(String role) {
         return role == null ? "USER" : role.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private String effectiveRole(AppUser user, Instant now) {
+        if (user == null || !expiredTemporaryMembership(user, now)) {
+            return normalizeRole(user == null ? null : user.getRole());
+        }
+        String fallbackRole = normalizeRole(user.getMembershipFallbackRole());
+        return "ADMIN".equals(fallbackRole) ? "USER" : fallbackRole;
+    }
+
+    private long effectiveQuotaBytes(AppUser user, Policy policy, Instant now) {
+        Long storedQuota = expiredTemporaryMembership(user, now)
+                ? user.getMembershipFallbackQuotaBytes()
+                : user.getQuotaBytes();
+        return Math.max(storedQuota == null ? 0L : storedQuota, policy.storageQuotaBytes());
+    }
+
+    private boolean activeTemporaryMembership(AppUser user, Instant now) {
+        return user != null
+                && user.getMembershipExpiresAt() != null
+                && user.getMembershipExpiresAt().isAfter(now);
+    }
+
+    private boolean expiredTemporaryMembership(AppUser user, Instant now) {
+        return user != null
+                && user.getMembershipExpiresAt() != null
+                && !user.getMembershipExpiresAt().isAfter(now);
+    }
+
+    private int membershipRank(String role) {
+        return switch (normalizeRole(role)) {
+            case "VIP" -> 1;
+            case "SVIP" -> 2;
+            case "ADMIN" -> 3;
+            default -> 0;
+        };
     }
 
     private void requireUsableUser(AppUser user) {

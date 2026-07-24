@@ -123,7 +123,8 @@ class InviteCodeServiceTest {
                 export.content()[0], export.content()[1], export.content()[2]
         });
         String csv = new String(export.content(), StandardCharsets.UTF_8);
-        assertTrue(csv.contains("code,role,expires_at,batch_no"));
+        assertTrue(csv.contains("code,role,membership_days,expires_at,invite_expires_at,batch_no,note"));
+        assertTrue(csv.contains("\"30\""));
         assertTrue(csv.contains("\"SVIP\""));
         assertTrue(csv.contains("\"CM-"));
         assertEquals("text/csv;charset=UTF-8", export.contentType());
@@ -148,8 +149,11 @@ class InviteCodeServiceTest {
         assertNotNull(inviteCode.getRedeemedAt());
         assertTrue(authService.upgradeCalled);
         assertEquals("VIP", authService.lastTargetRole);
+        assertEquals(30, authService.lastMembershipDays);
         assertEquals(50L * 1024 * 1024 * 1024, authService.lastTargetQuota);
-        verify(codeRepository).save(inviteCode);
+        assertEquals(30, result.get("membershipDays"));
+        assertNotNull(result.get("membershipExpiresAt"));
+        verify(codeRepository).saveAndFlush(inviteCode);
 
         assertThrows(
                 IllegalArgumentException.class,
@@ -206,6 +210,25 @@ class InviteCodeServiceTest {
                 () -> service.redeem("token", plainCode)
         );
         assertFalse(authService.upgradeCalled);
+    }
+
+    @Test
+    void sameTemporaryMembershipCanBeExtendedWithoutChangingTheRole() {
+        String plainCode = "CM-ABCDE-FGHJK-MNPQR-STUVW-XYZ234";
+        AppUser user = user("VIP");
+        Instant currentExpiry = Instant.now().plusSeconds(7L * 24 * 3600);
+        user.setMembershipExpiresAt(currentExpiry);
+        user.setMembershipFallbackRole("USER");
+        InviteCode inviteCode = inviteCode("VIP", Instant.now().plusSeconds(3600));
+        authService.requiredUser = user;
+        when(codeRepository.findForUpdateByCodeHash(hash(plainCode)))
+                .thenReturn(Optional.of(inviteCode));
+
+        Map<String, Object> result = service.redeem("token", plainCode);
+
+        assertEquals("VIP", result.get("targetRole"));
+        assertTrue(user.getMembershipExpiresAt().isAfter(currentExpiry));
+        assertNotNull(inviteCode.getRedeemedAt());
     }
 
     @Test
@@ -278,6 +301,7 @@ class InviteCodeServiceTest {
         CreateInviteBatchRequest request = new CreateInviteBatchRequest();
         request.setRole(role);
         request.setCount(count);
+        request.setMembershipDays(30);
         request.setExpiresAt(Instant.now().plusSeconds(30L * 24 * 3600));
         request.setNote("校园内测");
         request.setCurrentPassword("admin-password");
@@ -289,6 +313,7 @@ class InviteCodeServiceTest {
         batch.setId(15L);
         batch.setBatchNo("CM-20260724-000000-ABCDEF");
         batch.setTargetRole(targetRole);
+        batch.setMembershipDays(30);
         batch.setExpiresAt(expiresAt);
         InviteCode code = new InviteCode();
         code.setId(19L);
@@ -336,6 +361,7 @@ class InviteCodeServiceTest {
         private boolean upgradeCalled;
         private String lastTargetRole;
         private long lastTargetQuota;
+        private int lastMembershipDays;
 
         StubAuthService() {
             super(
@@ -368,11 +394,19 @@ class InviteCodeServiceTest {
                 String accessToken,
                 AppUser user,
                 String targetRole,
-                long targetQuotaBytes
+                long targetQuotaBytes,
+                int membershipDays
         ) {
             upgradeCalled = true;
             lastTargetRole = targetRole;
             lastTargetQuota = targetQuotaBytes;
+            lastMembershipDays = membershipDays;
+            Instant base = user.getMembershipExpiresAt() != null
+                    && user.getMembershipExpiresAt().isAfter(Instant.now())
+                    ? user.getMembershipExpiresAt()
+                    : Instant.now();
+            user.setRole(targetRole);
+            user.setMembershipExpiresAt(base.plusSeconds(membershipDays * 24L * 3600));
             return rotatedSession;
         }
     }

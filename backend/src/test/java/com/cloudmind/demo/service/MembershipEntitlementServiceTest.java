@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
@@ -66,6 +67,25 @@ class MembershipEntitlementServiceTest {
         Map<String, Object> summary = service.summary(user);
         assertEquals(0, summary.get("dailyAiRemaining"));
         assertEquals(10, summary.get("dailyAiUsed"));
+    }
+
+    @Test
+    void expiredTemporaryMembershipImmediatelyUsesFallbackEntitlements() {
+        AppUser expiredVip = user("VIP");
+        expiredVip.setQuotaBytes(50L * 1024 * 1024 * 1024);
+        expiredVip.setMembershipExpiresAt(Instant.now().minusSeconds(1));
+        expiredVip.setMembershipFallbackRole("USER");
+        expiredVip.setMembershipFallbackQuotaBytes(10L * 1024 * 1024 * 1024);
+
+        Map<String, Object> summary = service.summary(expiredVip);
+
+        assertEquals("USER", summary.get("role"));
+        assertEquals("STANDARD", summary.get("membershipStatus"));
+        assertEquals(20L * 1024 * 1024, summary.get("maxFileBytes"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.assertFileUploadAllowed(expiredVip, 21L * 1024 * 1024)
+        );
     }
 
     private AppUser user(String role) {

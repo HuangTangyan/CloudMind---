@@ -30,6 +30,9 @@ public class InviteCodeBatch {
     @Column(name = "target_role", nullable = false, length = 16)
     private String targetRole;
 
+    @Column(name = "membership_days", nullable = false)
+    private Integer membershipDays;
+
     @Column(name = "total_count", nullable = false)
     private Integer totalCount;
 
@@ -62,6 +65,7 @@ public class InviteCodeBatch {
     @PrePersist
     void prePersist() {
         if (createdAt == null) createdAt = Instant.now();
+        if (membershipDays == null) membershipDays = 30;
     }
 
     public Long getId() { return id; }
@@ -70,6 +74,8 @@ public class InviteCodeBatch {
     public void setBatchNo(String batchNo) { this.batchNo = batchNo; }
     public String getTargetRole() { return targetRole; }
     public void setTargetRole(String targetRole) { this.targetRole = targetRole; }
+    public Integer getMembershipDays() { return membershipDays; }
+    public void setMembershipDays(Integer membershipDays) { this.membershipDays = membershipDays; }
     public Integer getTotalCount() { return totalCount; }
     public void setTotalCount(Integer totalCount) { this.totalCount = totalCount; }
     public Instant getExpiresAt() { return expiresAt; }

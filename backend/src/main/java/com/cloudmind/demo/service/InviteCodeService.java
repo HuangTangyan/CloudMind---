@@ -97,6 +97,9 @@ public class InviteCodeService {
             if (request.getCount() < 1 || request.getCount() > configuredLimit) {
                 throw new IllegalArgumentException("单批邀请码数量应为 1-" + configuredLimit);
             }
+            if (request.getMembershipDays() < 1 || request.getMembershipDays() > 365) {
+                throw new IllegalArgumentException("会员期限应为 1-365 天");
+            }
 
             Instant now = Instant.now();
             Instant expiresAt = request.getExpiresAt();
@@ -124,6 +127,7 @@ public class InviteCodeService {
             batchNo = newBatchNo(now);
             batch.setBatchNo(batchNo);
             batch.setTargetRole(role);
+            batch.setMembershipDays(request.getMembershipDays());
             batch.setTotalCount(request.getCount());
             batch.setExpiresAt(expiresAt);
             batch.setNote(normalizeNote(request.getNote()));
@@ -158,11 +162,13 @@ public class InviteCodeService {
                     ? "text/csv;charset=UTF-8"
                     : "text/plain;charset=UTF-8";
             String filename = "cloudmind-" + role.toLowerCase(Locale.ROOT)
+                    + "-" + request.getMembershipDays() + "d"
                     + "-" + batch.getBatchNo().toLowerCase(Locale.ROOT)
                     + "." + extension;
             auditService.record(
                     lockedAdmin, "CREATE_EXPORT", batchNo, null, "SUCCESS",
-                    "生成 " + request.getCount() + " 个 " + role + " 邀请码",
+                    "生成 " + request.getCount() + " 个 " + role
+                            + " 邀请码；会员期限 " + request.getMembershipDays() + " 天",
                     clientIp, userAgent
             );
             return new InviteBatchExport(
@@ -308,42 +314,78 @@ public class InviteCodeService {
 
     @Transactional
     public Map<String, Object> redeem(String accessToken, String plainCode) {
-        AppUser user = authService.requireUser(accessToken);
-        String codeHash = hashCanonicalCode(canonicalCode(plainCode));
-        InviteCode code = codeRepository.findForUpdateByCodeHash(codeHash)
-                .orElseThrow(this::unavailableCode);
-        InviteCodeBatch batch = code.getBatch();
-        Instant now = Instant.now();
-        if (code.getRedeemedAt() != null
-                || code.getRevokedAt() != null
-                || batch.getRevokedAt() != null
-                || batch.getExpiresAt() == null
-                || !batch.getExpiresAt().isAfter(now)) {
-            throw unavailableCode();
+        return redeem(accessToken, plainCode, null, null);
+    }
+
+    @Transactional
+    public Map<String, Object> redeem(
+            String accessToken,
+            String plainCode,
+            String clientIp,
+            String userAgent
+    ) {
+        AppUser user = null;
+        String batchNo = null;
+        String codeFingerprint = null;
+        try {
+            user = authService.requireUser(accessToken);
+            String codeHash = hashCanonicalCode(canonicalCode(plainCode));
+            codeFingerprint = fingerprint(codeHash);
+            InviteCode code = codeRepository.findForUpdateByCodeHash(codeHash)
+                    .orElseThrow(this::unavailableCode);
+            InviteCodeBatch batch = code.getBatch();
+            batchNo = batch.getBatchNo();
+            Instant now = Instant.now();
+            if (code.getRedeemedAt() != null
+                    || code.getRevokedAt() != null
+                    || batch.getRevokedAt() != null
+                    || batch.getExpiresAt() == null
+                    || !batch.getExpiresAt().isAfter(now)) {
+                throw unavailableCode();
+            }
+
+            String targetRole = normalizeTargetRole(batch.getTargetRole());
+            int membershipDays = normalizeMembershipDays(batch.getMembershipDays());
+            boolean activeTemporaryMembership = user.getMembershipExpiresAt() != null
+                    && user.getMembershipExpiresAt().isAfter(now);
+            int currentRank = membershipRank(user.getRole());
+            int targetRank = membershipRank(targetRole);
+            if (currentRank > targetRank || currentRank == targetRank && !activeTemporaryMembership) {
+                throw new IllegalArgumentException("当前会员等级无需使用该邀请码");
+            }
+
+            long targetQuota = membershipEntitlementService.storageQuotaBytes(targetRole);
+            Map<String, Object> session = authService.upgradeMembershipAndRotateSession(
+                    accessToken,
+                    user,
+                    targetRole,
+                    targetQuota,
+                    membershipDays
+            );
+            code.setRedeemedBy(user);
+            code.setRedeemedAt(now);
+            codeRepository.saveAndFlush(code);
+
+            auditService.record(
+                    user, "REDEEM", batchNo, codeFingerprint, "SUCCESS",
+                    "兑换 " + targetRole + "；会员期限 " + membershipDays + " 天",
+                    clientIp, userAgent
+            );
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("targetRole", targetRole);
+            result.put("membershipDays", membershipDays);
+            result.put("membershipExpiresAt", user.getMembershipExpiresAt());
+            result.put("batchNo", batchNo);
+            result.put("redeemedAt", now);
+            result.put("session", session);
+            return result;
+        } catch (RuntimeException ex) {
+            auditService.record(
+                    user, "REDEEM", batchNo, codeFingerprint, "FAILED",
+                    safeAuditReason(ex), clientIp, userAgent
+            );
+            throw ex;
         }
-
-        String targetRole = normalizeTargetRole(batch.getTargetRole());
-        if (membershipRank(user.getRole()) >= membershipRank(targetRole)) {
-            throw new IllegalArgumentException("当前会员等级无需使用该邀请码");
-        }
-
-        long targetQuota = membershipEntitlementService.storageQuotaBytes(targetRole);
-        Map<String, Object> session = authService.upgradeMembershipAndRotateSession(
-                accessToken,
-                user,
-                targetRole,
-                targetQuota
-        );
-        code.setRedeemedBy(user);
-        code.setRedeemedAt(now);
-        codeRepository.save(code);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("targetRole", targetRole);
-        result.put("batchNo", batch.getBatchNo());
-        result.put("redeemedAt", now);
-        result.put("session", session);
-        return result;
     }
 
     private Map<String, Object> toBatchMap(InviteCodeBatch batch, Instant now) {
@@ -358,6 +400,7 @@ public class InviteCodeService {
         result.put("id", batch.getId());
         result.put("batchNo", batch.getBatchNo());
         result.put("targetRole", batch.getTargetRole());
+        result.put("membershipDays", normalizeMembershipDays(batch.getMembershipDays()));
         result.put("totalCount", totalCount);
         result.put("redeemedCount", redeemedCount);
         result.put("revokedCount", revokedCount);
@@ -428,12 +471,15 @@ public class InviteCodeService {
 
     private byte[] csvContent(InviteCodeBatch batch, List<String> plainCodes) {
         StringBuilder content = new StringBuilder("\uFEFF");
-        content.append("code,role,expires_at,batch_no\r\n");
+        content.append("code,role,membership_days,expires_at,invite_expires_at,batch_no,note\r\n");
         for (String code : plainCodes) {
             content.append(csvCell(code)).append(',')
                     .append(csvCell(batch.getTargetRole())).append(',')
+                    .append(csvCell(String.valueOf(normalizeMembershipDays(batch.getMembershipDays())))).append(',')
                     .append(csvCell(batch.getExpiresAt().toString())).append(',')
-                    .append(csvCell(batch.getBatchNo())).append("\r\n");
+                    .append(csvCell(batch.getExpiresAt().toString())).append(',')
+                    .append(csvCell(batch.getBatchNo())).append(',')
+                    .append(csvCell(batch.getNote())).append("\r\n");
         }
         return content.toString().getBytes(StandardCharsets.UTF_8);
     }
@@ -521,6 +567,14 @@ public class InviteCodeService {
             case "ADMIN" -> 3;
             default -> 0;
         };
+    }
+
+    private int normalizeMembershipDays(Integer membershipDays) {
+        int value = membershipDays == null ? 30 : membershipDays;
+        if (value < 1 || value > 365) {
+            throw new IllegalArgumentException("会员期限应为 1-365 天");
+        }
+        return value;
     }
 
     private IllegalArgumentException unavailableCode() {

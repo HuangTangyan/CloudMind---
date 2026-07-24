@@ -17,6 +17,10 @@ public class CreateInviteBatchRequest {
     @Max(value = 500, message = "单批最多生成 500 个邀请码")
     private int count;
 
+    @Min(value = 1, message = "会员期限不能少于 1 天")
+    @Max(value = 365, message = "会员期限不能超过 365 天")
+    private int membershipDays = 30;
+
     @NotNull(message = "有效期不能为空")
     @Future(message = "有效期必须晚于当前时间")
     private Instant expiresAt;
@@ -42,6 +46,14 @@ public class CreateInviteBatchRequest {
 
     public void setCount(int count) {
         this.count = count;
+    }
+
+    public int getMembershipDays() {
+        return membershipDays;
+    }
+
+    public void setMembershipDays(int membershipDays) {
+        this.membershipDays = membershipDays;
     }
 
     public Instant getExpiresAt() {

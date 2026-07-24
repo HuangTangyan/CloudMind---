@@ -215,6 +215,29 @@ class AuthServiceTest {
     }
 
     @Test
+    void expiredTemporaryMembershipFallsBackDuringLogin() {
+        AppUser user = user(14L, "expired_member", "SVIP");
+        user.setPasswordHash(passwordEncoder.encode("safe-password"));
+        user.setSalt("");
+        user.setPasswordChangedAt(Instant.now());
+        user.setQuotaBytes(200L * 1024 * 1024 * 1024);
+        user.setMembershipExpiresAt(Instant.now().minusSeconds(1));
+        user.setMembershipFallbackRole("VIP");
+        user.setMembershipFallbackQuotaBytes(50L * 1024 * 1024 * 1024);
+        when(userRepository.findByUsername("expired_member")).thenReturn(Optional.of(user));
+
+        Map<String, Object> login = authService.login("expired_member", "safe-password");
+
+        assertEquals("VIP", user.getRole());
+        assertEquals(50L * 1024 * 1024 * 1024, user.getQuotaBytes());
+        assertNull(user.getMembershipExpiresAt());
+        assertNull(user.getMembershipFallbackRole());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sessionUser = (Map<String, Object>) login.get("user");
+        assertEquals("VIP", sessionUser.get("role"));
+    }
+
+    @Test
     void userCanListAndRevokeOwnDeviceSession() {
         AppUser user = user(11L, "device_user", "USER");
         user.setPasswordHash(passwordEncoder.encode("safe-password"));

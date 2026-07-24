@@ -46,6 +46,7 @@ cloudmind:
     vip-daily-ai: ${VIP_DAILY_AI:50}
     svip-daily-ai: ${SVIP_DAILY_AI:200}
     admin-daily-ai: ${ADMIN_DAILY_AI:1000}
+    expiry-cleanup-interval-ms: ${MEMBERSHIP_EXPIRY_CLEANUP_INTERVAL_MS:3600000}
   invites:
     max-batch-size: ${INVITE_MAX_BATCH_SIZE:500}
     daily-generation-limit: ${INVITE_DAILY_GENERATION_LIMIT:2000}
