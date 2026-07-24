@@ -192,6 +192,8 @@ docker-compose.local.yml
 *.dump
 *.backup
 *.bak
+*.age
+backups/
 
 # User uploaded files / local storage
 uploads/

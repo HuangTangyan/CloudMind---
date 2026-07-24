@@ -6,9 +6,11 @@ import com.cloudmind.demo.dto.LogoutRequest;
 import com.cloudmind.demo.dto.RefreshTokenRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.service.AuthService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -21,23 +23,50 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public Map<String, Object> register(@Valid @RequestBody LoginRequest request) {
+    public Map<String, Object> register(
+            @Valid @RequestBody LoginRequest request,
+            HttpServletRequest servletRequest
+    ) {
         AppUser user = authService.register(request.getUsername(), request.getPassword());
-        Map<String, Object> loginResult = authService.login(user.getUsername(), request.getPassword());
+        Map<String, Object> loginResult = authService.login(
+                user.getUsername(),
+                request.getPassword(),
+                servletRequest.getRemoteAddr(),
+                servletRequest.getHeader("User-Agent")
+        );
         return Map.of("success", true, "message", "注册成功", "data", loginResult);
     }
 
     @PostMapping("/login")
-    public Map<String, Object> login(@Valid @RequestBody LoginRequest request) {
-        return Map.of("success", true, "message", "登录成功", "data", authService.login(request.getUsername(), request.getPassword()));
+    public Map<String, Object> login(
+            @Valid @RequestBody LoginRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        return Map.of(
+                "success", true,
+                "message", "登录成功",
+                "data", authService.login(
+                        request.getUsername(),
+                        request.getPassword(),
+                        servletRequest.getRemoteAddr(),
+                        servletRequest.getHeader("User-Agent")
+                )
+        );
     }
 
     @PostMapping("/refresh")
-    public Map<String, Object> refresh(@Valid @RequestBody RefreshTokenRequest request) {
+    public Map<String, Object> refresh(
+            @Valid @RequestBody RefreshTokenRequest request,
+            HttpServletRequest servletRequest
+    ) {
         return Map.of(
                 "success", true,
                 "message", "登录状态已刷新",
-                "data", authService.refreshSession(request.getRefreshToken())
+                "data", authService.refreshSession(
+                        request.getRefreshToken(),
+                        servletRequest.getRemoteAddr(),
+                        servletRequest.getHeader("User-Agent")
+                )
         );
     }
 
@@ -54,6 +83,23 @@ public class AuthController {
     public Map<String, Object> me(@RequestHeader(value = "X-Token", required = false) String token) {
         AppUser user = authService.requireSessionUser(token);
         return Map.of("success", true, "data", authService.toUserMap(user));
+    }
+
+    @GetMapping("/sessions")
+    public Map<String, Object> sessions(
+            @RequestHeader(value = "X-Token", required = false) String token
+    ) {
+        List<Map<String, Object>> sessions = authService.sessions(token);
+        return Map.of("success", true, "data", sessions);
+    }
+
+    @DeleteMapping("/sessions/{familyId}")
+    public Map<String, Object> revokeSession(
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @PathVariable String familyId
+    ) {
+        authService.revokeSession(token, familyId);
+        return Map.of("success", true, "message", "设备会话已下线");
     }
 
     @PostMapping("/change-password")

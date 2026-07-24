@@ -38,12 +38,22 @@ public class AuthToken {
     @Column(name = "revoked_at")
     private Instant revokedAt;
 
+    @Column(name = "client_ip", length = 64)
+    private String clientIp;
+
+    @Column(name = "user_agent", length = 255)
+    private String userAgent;
+
+    @Column(name = "last_used_at", nullable = false)
+    private Instant lastUsedAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
     @PrePersist
     void prePersist() {
         if (createdAt == null) createdAt = Instant.now();
+        if (lastUsedAt == null) lastUsedAt = createdAt;
     }
 
     public Long getId() { return id; }
@@ -60,6 +70,12 @@ public class AuthToken {
     public void setExpiresAt(Instant expiresAt) { this.expiresAt = expiresAt; }
     public Instant getRevokedAt() { return revokedAt; }
     public void setRevokedAt(Instant revokedAt) { this.revokedAt = revokedAt; }
+    public String getClientIp() { return clientIp; }
+    public void setClientIp(String clientIp) { this.clientIp = clientIp; }
+    public String getUserAgent() { return userAgent; }
+    public void setUserAgent(String userAgent) { this.userAgent = userAgent; }
+    public Instant getLastUsedAt() { return lastUsedAt; }
+    public void setLastUsedAt(Instant lastUsedAt) { this.lastUsedAt = lastUsedAt; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

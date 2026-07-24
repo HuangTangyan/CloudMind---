@@ -39,3 +39,40 @@ jobs:
           java-version: "17"
           cache: maven
       - run: mvn --batch-mode test
+
+  deployment-config:
+    runs-on: ubuntu-latest
+    env:
+      MYSQL_ROOT_PASSWORD: ci-root-password
+      MYSQL_DATABASE: cloudmind
+      MYSQL_USER: cloudmind
+      MYSQL_PASSWORD: ci-database-password
+      MINIO_ROOT_USER: ci-minio-user
+      MINIO_ROOT_PASSWORD: ci-minio-password
+      MINIO_IMAGE: minio/minio:RELEASE.TEST-IMMUTABLE
+      CLOUDMIND_ALLOWED_ORIGINS: https://cloudmind.example.com
+      CLOUDMIND_DOMAIN: cloudmind.example.com
+      CLOUDMIND_BACKEND_UPSTREAM: backend:8080
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - name: Validate backup scripts
+        run: bash -n deploy/backup.sh deploy/restore-drill.sh
+      - name: Render Docker Compose configuration
+        run: docker compose config --quiet
+      - name: Verify private service exposure
+        shell: bash
+        run: |
+          rendered="$(docker compose config)"
+          if grep -Eq 'host_ip: ("?0\.0\.0\.0"?|"?::"?)' <<< "$rendered"; then
+            echo "Database or object storage is exposed on a public interface."
+            exit 1
+          fi
+          grep -q 'host_ip: 127.0.0.1' <<< "$rendered"
+          grep -q 'internal: true' <<< "$rendered"
+      - name: Verify TLS proxy baseline
+        shell: bash
+        run: |
+          grep -q 'listen 443 ssl' deploy/nginx/cloudmind.conf.template
+          grep -q 'Strict-Transport-Security' deploy/nginx/cloudmind.conf.template
+          grep -q 'Content-Security-Policy' deploy/nginx/cloudmind.conf.template

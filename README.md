@@ -109,6 +109,7 @@ http://localhost:5173
 mysql -u <管理员> -p <数据库名> < backend/deploy/001-security-batch1.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/002-auth-token-security.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/003-security-batch3.sql
+mysql -u <管理员> -p <数据库名> < backend/deploy/004-security-batch4.sql
 ```
 
 第二批安全加固启用了 Spring Security 统一鉴权、30 分钟访问令牌、
@@ -143,3 +144,19 @@ docker compose up -d mysql minio
   `MAX_LOGIN_FAILURES` 和 `LOGIN_LOCK_DURATION` 调整。
 - 每个错误响应都会返回 `X-Request-Id` 和 `requestId`，排查问题时只需
   提供该编号，不应把完整 Token、密码或 API Key 写入日志。
+
+## 第四批上线安全配置
+
+- MySQL、MinIO API 和 MinIO 控制台仅绑定 `127.0.0.1`，并加入隔离的
+  `cloudmind-data` Docker 网络。不要在生产防火墙中开放 3306、9000 或
+  9001。
+- 生产环境必须设置 `CLOUDMIND_ALLOWED_ORIGINS`，只接受明确的 HTTPS
+  Origin，不允许通配符、HTTP 或路径。TLS 终止和静态站点安全头模板位于
+  `deploy/nginx/cloudmind.conf.template`。
+- 用户可以通过 `GET /api/auth/sessions` 查看自己的设备会话，通过
+  `DELETE /api/auth/sessions/{familyId}` 下线指定会话。管理员修改用户角色后，
+  该用户的全部旧令牌会立即撤销。
+- 接口角色与资源归属基线位于
+  `deploy/SECURITY_AUTHORIZATION_MATRIX.md`，并由越权回归测试覆盖。
+- 加密备份和隔离恢复演练说明位于 `deploy/BACKUP_RESTORE.md`。上线前必须
+  至少成功执行一次 `deploy/restore-drill.sh`，并记录耗时、表数量和对象数量。

@@ -801,6 +801,56 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
 
 .modal-mask { background: rgba(15, 23, 42, .56); backdrop-filter: blur(3px); }
 .modal { border-radius: var(--radius-lg); box-shadow: 0 24px 60px rgba(15, 23, 42, .24); }
+.session-modal { width: min(720px, 100%); }
+.session-list { display: grid; gap: 10px; margin-top: 16px; }
+.session-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.session-icon {
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+}
+.session-info { min-width: 0; }
+.session-info > div { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.session-info em {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e8f7ef;
+  color: #16724a;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+.session-info p, .session-info small { display: block; margin: 4px 0 0; color: var(--muted); }
+.session-info small { line-height: 1.55; }
+.session-empty {
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  background: #f8fafc;
+}
+.session-tip { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.danger-action:not(:disabled) { color: #b4233b; border-color: #efb8c2; }
+.danger-action:not(:disabled):hover { background: #fff1f3; border-color: #df8292; }
 .loading { display: inline-flex; align-items: center; gap: 9px; border-radius: 999px; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -875,7 +925,7 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .top-actions > * { flex: 0 0 auto; }
   .secondary-upload { display: none; }
   .user-menu { margin-left: auto; }
-  .user-menu > div, .logout-button span { display: none; }
+  .user-menu > div, .logout-button span, .session-button span { display: none; }
   .global-search { grid-template-columns: auto minmax(0, 1fr) auto; }
   .global-search input { min-width: 0; }
   .global-search button { padding-inline: 11px; }
@@ -917,6 +967,8 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .admin-actions, .row-actions { justify-content: flex-start; }
   .modal-mask { align-items: flex-end; padding: 10px; }
   .modal { width: 100%; max-height: 94dvh; padding: 18px; border-radius: 20px 20px 12px 12px; }
+  .session-row { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .session-row > button { grid-column: 2; justify-self: start; }
 }
 
 @media (max-width: 520px) {

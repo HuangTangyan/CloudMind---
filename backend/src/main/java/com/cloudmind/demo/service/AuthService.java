@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -70,6 +71,16 @@ public class AuthService {
 
     @Transactional(noRollbackFor = {IllegalArgumentException.class, LoginLockedException.class})
     public Map<String, Object> login(String username, String password) {
+        return login(username, password, null, null);
+    }
+
+    @Transactional(noRollbackFor = {IllegalArgumentException.class, LoginLockedException.class})
+    public Map<String, Object> login(
+            String username,
+            String password,
+            String clientIp,
+            String userAgent
+    ) {
         username = normalizeUsername(username);
         AppUser user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("用户名或密码错误"));
@@ -103,7 +114,7 @@ public class AuthService {
             user.setSalt("");
         }
         userRepository.save(user);
-        return issueSession(user, UUID.randomUUID().toString());
+        return issueSession(user, UUID.randomUUID().toString(), clientIp, userAgent);
     }
 
     public AppUser requireUser(String token) {
@@ -114,7 +125,7 @@ public class AuthService {
         return user;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AppUser requireSessionUser(String token) {
         if (token == null || token.isBlank()) {
             throw new SecurityException("请先登录");
@@ -127,11 +138,29 @@ public class AuthService {
         if (!Boolean.TRUE.equals(user.getEnabled())) {
             throw new SecurityException("账号已被禁用");
         }
+        Instant usedAt = Instant.now();
+        if (storedToken.getId() != null) {
+            authTokenRepository.touchLastUsed(
+                    storedToken.getId(),
+                    usedAt,
+                    usedAt.minus(Duration.ofMinutes(5))
+            );
+        }
+        storedToken.setLastUsedAt(usedAt);
         return user;
     }
 
     @Transactional(noRollbackFor = SecurityException.class)
     public Map<String, Object> refreshSession(String refreshToken) {
+        return refreshSession(refreshToken, null, null);
+    }
+
+    @Transactional(noRollbackFor = SecurityException.class)
+    public Map<String, Object> refreshSession(
+            String refreshToken,
+            String clientIp,
+            String userAgent
+    ) {
         if (refreshToken == null || refreshToken.isBlank()) {
             throw new SecurityException("刷新令牌不能为空");
         }
@@ -149,7 +178,18 @@ public class AuthService {
             throw new SecurityException("账号已被禁用");
         }
         authTokenRepository.revokeFamily(storedToken.getFamilyId(), Instant.now());
-        return issueSession(user, storedToken.getFamilyId());
+        String resolvedIp = clientIp == null || clientIp.isBlank()
+                ? storedToken.getClientIp()
+                : clientIp;
+        String resolvedUserAgent = userAgent == null || userAgent.isBlank()
+                ? storedToken.getUserAgent()
+                : userAgent;
+        return issueSession(
+                user,
+                storedToken.getFamilyId(),
+                resolvedIp,
+                resolvedUserAgent
+        );
     }
 
     @Transactional
@@ -157,6 +197,36 @@ public class AuthService {
         Optional<AuthToken> stored = findAnyToken(accessToken, AuthToken.ACCESS)
                 .or(() -> findAnyToken(refreshToken, AuthToken.REFRESH));
         stored.ifPresent(token -> authTokenRepository.revokeFamily(token.getFamilyId(), Instant.now()));
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> sessions(String accessToken) {
+        AuthToken current = requireStoredAccessToken(accessToken);
+        AppUser user = current.getUser();
+        Instant now = Instant.now();
+        LinkedHashMap<String, Map<String, Object>> families = new LinkedHashMap<>();
+        mergeSessionToken(families, current, current.getFamilyId(), now);
+        for (AuthToken token : authTokenRepository
+                .findByUser_IdOrderByCreatedAtDesc(user.getId())) {
+            mergeSessionToken(families, token, current.getFamilyId(), now);
+        }
+        return List.copyOf(families.values());
+    }
+
+    @Transactional
+    public void revokeSession(String accessToken, String familyId) {
+        AuthToken current = requireStoredAccessToken(accessToken);
+        if (familyId == null || familyId.isBlank()) {
+            throw new IllegalArgumentException("会话 ID 不能为空");
+        }
+        int revoked = authTokenRepository.revokeFamilyForUser(
+                current.getUser().getId(),
+                familyId.trim(),
+                Instant.now()
+        );
+        if (revoked == 0) {
+            throw new IllegalArgumentException("会话不存在或已经下线");
+        }
     }
 
     public AppUser requireAdmin(String token) {
@@ -245,7 +315,13 @@ public class AuthService {
     @Transactional
     public AppUser updateUserByAdmin(Long userId, String role, Long quotaBytes) {
         AppUser user = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("用户不存在"));
-        if (role != null && !role.isBlank()) user.setRole(normalizeRole(role));
+        if (role != null && !role.isBlank()) {
+            String normalizedRole = normalizeRole(role);
+            if (!normalizedRole.equalsIgnoreCase(user.getRole())) {
+                user.setRole(normalizedRole);
+                revokeTokens(user.getId());
+            }
+        }
         if (quotaBytes != null) user.setQuotaBytes(normalizeQuota(quotaBytes));
         return userRepository.save(user);
     }
@@ -292,6 +368,15 @@ public class AuthService {
     }
 
     private Map<String, Object> issueSession(AppUser user, String familyId) {
+        return issueSession(user, familyId, null, null);
+    }
+
+    private Map<String, Object> issueSession(
+            AppUser user,
+            String familyId,
+            String clientIp,
+            String userAgent
+    ) {
         Instant now = Instant.now();
         String accessToken = randomToken(32);
         String refreshToken = randomToken(48);
@@ -300,14 +385,20 @@ public class AuthService {
                 accessToken,
                 AuthToken.ACCESS,
                 familyId,
-                now.plus(accessTokenTtl)
+                now.plus(accessTokenTtl),
+                clientIp,
+                userAgent,
+                now
         ));
         authTokenRepository.save(newToken(
                 user,
                 refreshToken,
                 AuthToken.REFRESH,
                 familyId,
-                now.plus(refreshTokenTtl)
+                now.plus(refreshTokenTtl),
+                clientIp,
+                userAgent,
+                now
         ));
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -355,7 +446,10 @@ public class AuthService {
             String rawToken,
             String tokenType,
             String familyId,
-            Instant expiresAt
+            Instant expiresAt,
+            String clientIp,
+            String userAgent,
+            Instant lastUsedAt
     ) {
         AuthToken token = new AuthToken();
         token.setUser(user);
@@ -363,7 +457,25 @@ public class AuthService {
         token.setTokenType(tokenType);
         token.setFamilyId(familyId);
         token.setExpiresAt(expiresAt);
+        token.setClientIp(safeMetadata(clientIp, 64));
+        token.setUserAgent(safeMetadata(userAgent, 255));
+        token.setLastUsedAt(lastUsedAt);
+        token.setCreatedAt(lastUsedAt);
         return token;
+    }
+
+    private AuthToken requireStoredAccessToken(String rawToken) {
+        if (rawToken == null || rawToken.isBlank()) {
+            throw new SecurityException("请先登录");
+        }
+        AuthToken stored = authTokenRepository
+                .findByTokenHashAndTokenType(hashToken(rawToken), AuthToken.ACCESS)
+                .orElseThrow(() -> new SecurityException("登录状态已失效，请重新登录"));
+        validateActiveToken(stored, "登录状态已过期，请重新登录");
+        if (!Boolean.TRUE.equals(stored.getUser().getEnabled())) {
+            throw new SecurityException("账号已被禁用");
+        }
+        return stored;
     }
 
     private Optional<AuthToken> findAnyToken(String rawToken, String tokenType) {
@@ -378,6 +490,64 @@ public class AuthService {
         if (token.getExpiresAt() == null || !token.getExpiresAt().isAfter(Instant.now())) {
             throw new SecurityException(expiredMessage);
         }
+    }
+
+    private void mergeSessionToken(
+            LinkedHashMap<String, Map<String, Object>> families,
+            AuthToken token,
+            String currentFamilyId,
+            Instant now
+    ) {
+        if (token == null
+                || token.getFamilyId() == null
+                || token.getRevokedAt() != null
+                || token.getExpiresAt() == null
+                || !token.getExpiresAt().isAfter(now)) {
+            return;
+        }
+        Map<String, Object> session = families.computeIfAbsent(
+                token.getFamilyId(),
+                ignored -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("id", token.getFamilyId());
+                    item.put("current", token.getFamilyId().equals(currentFamilyId));
+                    item.put("clientIp", safeMetadata(token.getClientIp(), 64));
+                    item.put("userAgent", safeMetadata(token.getUserAgent(), 255));
+                    item.put("createdAt", token.getCreatedAt());
+                    item.put("lastUsedAt", token.getLastUsedAt());
+                    item.put("expiresAt", token.getExpiresAt());
+                    return item;
+                }
+        );
+        if (String.valueOf(session.get("clientIp")).isBlank()) {
+            session.put("clientIp", safeMetadata(token.getClientIp(), 64));
+        }
+        if (String.valueOf(session.get("userAgent")).isBlank()) {
+            session.put("userAgent", safeMetadata(token.getUserAgent(), 255));
+        }
+        session.put("createdAt", earlier((Instant) session.get("createdAt"), token.getCreatedAt()));
+        session.put("lastUsedAt", later((Instant) session.get("lastUsedAt"), token.getLastUsedAt()));
+        session.put("expiresAt", later((Instant) session.get("expiresAt"), token.getExpiresAt()));
+    }
+
+    private Instant earlier(Instant left, Instant right) {
+        if (left == null) return right;
+        if (right == null) return left;
+        return left.isBefore(right) ? left : right;
+    }
+
+    private Instant later(Instant left, Instant right) {
+        if (left == null) return right;
+        if (right == null) return left;
+        return left.isAfter(right) ? left : right;
+    }
+
+    private String safeMetadata(String value, int maxLength) {
+        if (value == null || value.isBlank()) return "";
+        String cleaned = value.replaceAll("[\\p{Cntrl}&&[^\\t]]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return cleaned.length() <= maxLength ? cleaned : cleaned.substring(0, maxLength);
     }
 
     private String randomToken(int byteLength) {

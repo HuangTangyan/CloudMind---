@@ -50,7 +50,25 @@ public class SecurityConfig {
                         .contentTypeOptions(Customizer.withDefaults())
                         .frameOptions(frame -> frame.deny())
                         .referrerPolicy(referrer ->
-                                referrer.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)))
+                                referrer.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
+                        .httpStrictTransportSecurity(hsts -> hsts
+                                .includeSubDomains(true)
+                                .preload(true)
+                                .maxAgeInSeconds(31536000))
+                        .contentSecurityPolicy(csp -> csp.policyDirectives(
+                                "default-src 'none'; "
+                                        + "base-uri 'none'; "
+                                        + "frame-ancestors 'none'; "
+                                        + "form-action 'self'; "
+                                        + "img-src 'self' data: blob:; "
+                                        + "media-src 'self' blob:; "
+                                        + "style-src 'self' 'unsafe-inline'; "
+                                        + "script-src 'self'; "
+                                        + "connect-src 'self'"
+                        ))
+                        .permissionsPolicy(permissions -> permissions.policy(
+                                "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+                        )))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(

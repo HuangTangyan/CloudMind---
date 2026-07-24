@@ -10,7 +10,9 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       TZ: Asia/Shanghai
     ports:
-      - "3306:3306"
+      - "127.0.0.1:${MYSQL_BIND_PORT:-3306}:3306"
+    networks:
+      - cloudmind-data
     volumes:
       - cloudmind_mysql_data:/var/lib/mysql
     command:
@@ -30,10 +32,13 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-cloudmind}
       TZ: Asia/Shanghai
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:${MINIO_API_BIND_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_BIND_PORT:-9001}:9001"
+    networks:
+      - cloudmind-data
     volumes:
       - cloudmind_minio_data:/data
     command: server /data --console-address ":9001"
@@ -41,3 +46,7 @@ services:
 volumes:
   cloudmind_mysql_data:
   cloudmind_minio_data:
+
+networks:
+  cloudmind-data:
+    internal: true

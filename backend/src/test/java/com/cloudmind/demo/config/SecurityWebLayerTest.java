@@ -1,6 +1,8 @@
 package com.cloudmind.demo.config;
 
 import com.cloudmind.demo.controller.AuthController;
+import com.cloudmind.demo.entity.AuthToken;
+import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.repository.AppUserRepository;
 import com.cloudmind.demo.repository.AuthTokenRepository;
 import com.cloudmind.demo.service.AuthService;
@@ -14,9 +16,18 @@ import org.springframework.http.MediaType;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+import java.util.Optional;
+
+import static org.hamcrest.Matchers.containsString;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -25,6 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SecurityWebLayerTest {
     @Autowired
     private MockMvc mockMvc;
+    @Autowired
+    private AuthTokenRepository authTokenRepository;
 
     @Test
     void protectedApiRejectsAnonymousRequestsWithJson401() throws Exception {
@@ -39,6 +52,67 @@ class SecurityWebLayerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void ordinaryUserCannotEnterAdminApi() throws Exception {
+        AppUser user = new AppUser();
+        user.setId(5L);
+        user.setUsername("ordinary-user");
+        user.setRole("USER");
+        user.setEnabled(true);
+        user.setPasswordChangedAt(Instant.now());
+        AuthToken token = new AuthToken();
+        token.setUser(user);
+        token.setTokenType(AuthToken.ACCESS);
+        token.setFamilyId("ordinary-user-family");
+        token.setExpiresAt(Instant.now().plusSeconds(60));
+        when(authTokenRepository.findByTokenHashAndTokenType(
+                anyString(),
+                eq(AuthToken.ACCESS)
+        )).thenReturn(Optional.of(token));
+
+        mockMvc.perform(get("/api/admin/users")
+                        .header("Authorization", "Bearer ordinary-token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void corsAllowsOnlyConfiguredOrigin() throws Exception {
+        mockMvc.perform(options("/api/auth/login")
+                        .header("Origin", "http://localhost:5173")
+                        .header("Access-Control-Request-Method", "POST"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(
+                        "Access-Control-Allow-Origin",
+                        "http://localhost:5173"
+                ));
+
+        mockMvc.perform(options("/api/auth/login")
+                        .header("Origin", "https://evil.example")
+                        .header("Access-Control-Request-Method", "POST"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void secureResponsesContainDeploymentSecurityHeaders() throws Exception {
+        mockMvc.perform(get("/api/auth/me").secure(true))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(
+                        "Strict-Transport-Security",
+                        containsString("max-age=31536000")
+                ))
+                .andExpect(header().string(
+                        "Content-Security-Policy",
+                        containsString("frame-ancestors 'none'")
+                ))
+                .andExpect(header().string(
+                        "Permissions-Policy",
+                        containsString("camera=()")
+                ))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                .andExpect(header().string("X-Frame-Options", "DENY"));
     }
 
     @TestConfiguration(proxyBeanMethods = false)

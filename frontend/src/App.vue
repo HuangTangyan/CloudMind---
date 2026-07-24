@@ -66,6 +66,8 @@ const searchKeyword = ref('')
 const viewMode = ref('files')
 const fileInput = ref(null)
 const folderInput = ref(null)
+const sessionSecurityButton = ref(null)
+const sessionCloseButton = ref(null)
 const fileDisplayMode = ref(localStorage.getItem('cloudmind-file-display') || 'list')
 const dragActive = ref(false)
 const dragDepth = ref(0)
@@ -86,6 +88,7 @@ const thumbnailUrls = ref({})
 let thumbnailGeneration = 0
 let refreshSessionPromise = null
 const targetDialog = ref({ visible: false, type: 'move', item: null, targetParentId: null, folders: [] })
+const sessionDialog = ref({ visible: false, loading: false, error: '', items: [] })
 
 const adminTab = ref('dashboard')
 const adminUsers = ref([])
@@ -696,6 +699,57 @@ async function logout() {
     })
   } finally {
     clearAuthState()
+  }
+}
+
+function sessionDeviceName(userAgent) {
+  const value = String(userAgent || '')
+  if (!value) return '未知设备'
+  const browser = value.includes('Edg/') ? 'Edge'
+    : value.includes('Chrome/') ? 'Chrome'
+      : value.includes('Firefox/') ? 'Firefox'
+        : value.includes('Safari/') ? 'Safari'
+          : '浏览器'
+  const system = value.includes('Windows') ? 'Windows'
+    : value.includes('Android') ? 'Android'
+      : value.includes('iPhone') || value.includes('iPad') ? 'iOS / iPadOS'
+        : value.includes('Mac OS') ? 'macOS'
+          : value.includes('Linux') ? 'Linux'
+            : '未知系统'
+  return `${browser} · ${system}`
+}
+
+async function openSessionDialog() {
+  sessionDialog.value = { visible: true, loading: true, error: '', items: [] }
+  await nextTick()
+  sessionCloseButton.value?.focus()
+  try {
+    const res = await request('/auth/sessions')
+    sessionDialog.value.items = Array.isArray(res.data) ? res.data : []
+  } catch (e) {
+    sessionDialog.value.error = e.message
+  } finally {
+    sessionDialog.value.loading = false
+  }
+}
+
+function closeSessionDialog() {
+  sessionDialog.value.visible = false
+  nextTick(() => sessionSecurityButton.value?.focus())
+}
+
+async function revokeDeviceSession(session) {
+  if (!session || session.current || sessionDialog.value.loading) return
+  sessionDialog.value.loading = true
+  sessionDialog.value.error = ''
+  try {
+    await request(`/auth/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' })
+    sessionDialog.value.items = sessionDialog.value.items.filter(item => item.id !== session.id)
+    setMessage('指定设备已安全下线')
+  } catch (e) {
+    sessionDialog.value.error = e.message
+  } finally {
+    sessionDialog.value.loading = false
   }
 }
 
@@ -1855,6 +1909,7 @@ onBeforeUnmount(() => {
             <div class="user-menu">
               <span class="avatar">{{ shortName(user.username) }}</span>
               <div><b>{{ user.username }}</b><small>{{ user.role }}</small></div>
+              <button ref="sessionSecurityButton" class="icon-btn session-button" aria-label="管理设备会话" title="会话安全" @click="openSessionDialog"><ShieldCheck :size="17" /><span>安全</span></button>
               <button class="icon-btn logout-button" aria-label="退出登录" title="退出登录" @click="logout"><LogOut :size="17" /><span>退出</span></button>
             </div>
           </div>
@@ -2321,6 +2376,36 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </template>
+
+        <div v-if="sessionDialog.visible" class="modal-mask" @click.self="closeSessionDialog">
+          <section class="modal session-modal" role="dialog" aria-modal="true" aria-labelledby="session-dialog-title" aria-describedby="session-dialog-description" @keydown.esc.stop="closeSessionDialog">
+            <header class="modal-head">
+              <div>
+                <span class="eyebrow">Account security</span>
+                <h3 id="session-dialog-title">设备会话</h3>
+                <p id="session-dialog-description">检查最近登录设备，发现陌生设备时立即下线。</p>
+              </div>
+              <button ref="sessionCloseButton" class="soft" aria-label="关闭设备会话" @click="closeSessionDialog"><X :size="17" />关闭</button>
+            </header>
+            <p v-if="sessionDialog.error" class="message inline danger" role="alert">{{ sessionDialog.error }}</p>
+            <div v-if="sessionDialog.loading && !sessionDialog.items.length" class="session-empty" role="status"><LoaderCircle class="spin" :size="18" />正在读取会话…</div>
+            <div v-else-if="!sessionDialog.items.length" class="session-empty">暂无有效设备会话。</div>
+            <div v-else class="session-list" :aria-busy="sessionDialog.loading">
+              <article v-for="session in sessionDialog.items" :key="session.id" class="session-row">
+                <span class="session-icon"><ShieldCheck :size="20" /></span>
+                <div class="session-info">
+                  <div><b>{{ sessionDeviceName(session.userAgent) }}</b><em v-if="session.current">当前设备</em></div>
+                  <p>IP：{{ session.clientIp || '未记录' }}</p>
+                  <small>最近活动 {{ formatTime(session.lastUsedAt || session.createdAt) }} · 会话到期 {{ formatTime(session.expiresAt) }}</small>
+                </div>
+                <button class="soft danger-action" :disabled="session.current || sessionDialog.loading" @click="revokeDeviceSession(session)">
+                  {{ session.current ? '正在使用' : '下线设备' }}
+                </button>
+              </article>
+            </div>
+            <p class="session-tip">修改密码或管理员调整你的权限后，所有旧会话都会自动失效。</p>
+          </section>
+        </div>
 
         <div v-if="previewVisible && previewData" class="modal-mask" @click.self="closePreview">
           <section class="modal large" role="dialog" aria-modal="true" aria-labelledby="preview-dialog-title">
