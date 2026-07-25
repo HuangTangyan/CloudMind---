@@ -56,6 +56,7 @@ const password = ref('')
 const currentPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
+const firstLoginUsername = ref('')
 const message = ref('')
 const loading = ref(false)
 const registrationEnabled = ref(false)
@@ -101,6 +102,21 @@ const adminTab = ref('dashboard')
 const adminUsers = ref([])
 const storageOverview = ref(null)
 const adminCreateForm = ref({ username: '', password: '', role: 'USER', quotaGb: 10 })
+const adminBatchCreateForm = ref({
+  usernamesText: '',
+  role: 'USER',
+  quotaGb: 10,
+  currentPassword: ''
+})
+const adminBatchCredentials = ref([])
+const selectedAdminUserIds = ref([])
+const adminBatchDeleteDialog = ref({
+  visible: false,
+  currentPassword: '',
+  confirmText: '',
+  error: '',
+  loading: false
+})
 const adminInviteBatches = ref([])
 const adminInviteStatus = ref(null)
 const adminInviteAudit = ref([])
@@ -160,6 +176,19 @@ const adminEditDialog = ref({ visible: false, user: null, role: 'USER', quotaGb:
 const currentParentId = computed(() => breadcrumb.value[breadcrumb.value.length - 1]?.id ?? null)
 const isAdmin = computed(() => user.value?.role === 'ADMIN')
 const mustChangePassword = computed(() => Boolean(user.value?.mustChangePassword))
+const mustChangeUsername = computed(() => Boolean(user.value?.mustChangeUsername))
+const mustCompleteFirstLogin = computed(() => Boolean(
+  user.value?.mustCompleteFirstLogin
+  || user.value?.mustChangePassword
+  || user.value?.mustChangeUsername
+))
+const selectableAdminUsers = computed(() => adminUsers.value.filter(
+  item => !item.isSelf && String(item.role || '').toUpperCase() !== 'ADMIN'
+))
+const allSelectableAdminUsersSelected = computed(() => (
+  selectableAdminUsers.value.length > 0
+  && selectableAdminUsers.value.every(item => selectedAdminUserIds.value.includes(item.id))
+))
 const canDragUpload = computed(() => Boolean(user.value) && !['admin', 'trash', 'gallery', 'knowledge'].includes(viewMode.value))
 const loginMessageIsBanned = computed(() => String(message.value || '').includes('禁用') || String(message.value || '').includes('封禁'))
 const filteredAuditUsers = computed(() => {
@@ -560,11 +589,14 @@ function normalizeAdminUser(u) {
 }
 
 function accountStatusText(u) {
-  return u?.enabled ? '账号正常' : '账号已封禁'
+  if (!u?.enabled) return '账号已封禁'
+  if (u?.mustCompleteFirstLogin) return '待首次设置'
+  return '账号正常'
 }
 
 function accountStatusClass(u) {
-  return u?.enabled ? '' : 'bad'
+  if (!u?.enabled) return 'bad'
+  return u?.mustCompleteFirstLogin ? 'pending' : ''
 }
 
 function contentStatusText(u) {
@@ -609,6 +641,10 @@ function clearAuthState() {
   token.value = ''
   refreshToken.value = ''
   user.value = null
+  currentPassword.value = ''
+  newPassword.value = ''
+  confirmPassword.value = ''
+  firstLoginUsername.value = ''
   membershipEntitlements.value = null
   replaceItems([])
   releasePreviewObjectUrl()
@@ -629,7 +665,7 @@ async function loadAuthCapabilities() {
 }
 
 async function loadMembershipEntitlements(showError = false) {
-  if (!token.value || mustChangePassword.value) return
+  if (!token.value || mustCompleteFirstLogin.value) return
   try {
     const res = await request('/membership/me')
     membershipEntitlements.value = res.data || null
@@ -703,7 +739,7 @@ async function login() {
     applyAuthSession(res.data)
     setMessage('登录成功')
     password.value = ''
-    if (!mustChangePassword.value) {
+    if (!mustCompleteFirstLogin.value) {
       await Promise.all([loadFiles(null, true), loadMembershipEntitlements()])
     }
   } catch (e) {
@@ -736,26 +772,32 @@ async function register() {
   }
 }
 
-async function changePassword() {
+async function completeFirstLogin() {
+  if (mustChangeUsername.value && !firstLoginUsername.value.trim()) {
+    setMessage('请输入新的正式用户名')
+    return
+  }
   if (newPassword.value !== confirmPassword.value) {
     setMessage('两次输入的新密码不一致')
     return
   }
   loading.value = true
   try {
-    const res = await request('/auth/change-password', {
+    const res = await request('/auth/complete-first-login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         currentPassword: currentPassword.value,
+        newUsername: mustChangeUsername.value ? firstLoginUsername.value.trim() : null,
         newPassword: newPassword.value
       })
     })
     applyAuthSession(res.data)
     currentPassword.value = ''
+    firstLoginUsername.value = ''
     newPassword.value = ''
     confirmPassword.value = ''
-    setMessage('密码已修改，请妥善保管新密码')
+    setMessage('用户名和密码已更新，请妥善保管新密码')
     await Promise.all([loadFiles(null, true), loadMembershipEntitlements()])
   } catch (e) {
     setMessage(e.message)
@@ -1518,6 +1560,8 @@ async function loadAdminUsers() {
   try {
     const res = await request('/admin/users')
     adminUsers.value = (res.data || []).map(normalizeAdminUser)
+    const selectableIds = new Set(selectableAdminUsers.value.map(item => item.id))
+    selectedAdminUserIds.value = selectedAdminUserIds.value.filter(id => selectableIds.has(id))
   } catch (e) {
     setMessage(e.message)
   } finally {
@@ -1809,11 +1853,194 @@ async function createAdminUser() {
     })
     setMessage('用户创建成功')
     adminCreateForm.value.username = ''
+    adminCreateForm.value.password = ''
     await loadAdminUsers()
   } catch (e) {
     setMessage(e.message)
   } finally {
     loading.value = false
+  }
+}
+
+function firstAccountCell(line) {
+  const value = String(line || '').trim()
+  if (!value.startsWith('"')) return value.split(/[,\t]/, 1)[0].trim()
+  let result = ''
+  for (let index = 1; index < value.length; index += 1) {
+    if (value[index] !== '"') {
+      result += value[index]
+      continue
+    }
+    if (value[index + 1] === '"') {
+      result += '"'
+      index += 1
+      continue
+    }
+    break
+  }
+  return result.trim()
+}
+
+function parseBatchUsernames(value) {
+  const headerNames = new Set(['username', 'user_name', 'account', '用户名', '账号'])
+  return String(value || '')
+    .split(/\r?\n/)
+    .map(firstAccountCell)
+    .filter(item => item && !headerNames.has(item.toLowerCase()))
+}
+
+async function importAdminAccountFile(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  if (!/\.(txt|csv)$/i.test(file.name)) {
+    setMessage('只支持导入 TXT 或 CSV 文件')
+    return
+  }
+  if (file.size > 1024 * 1024) {
+    setMessage('账号导入文件不能超过 1MB')
+    return
+  }
+  try {
+    adminBatchCreateForm.value.usernamesText = await file.text()
+    setMessage(`已读取 ${parseBatchUsernames(adminBatchCreateForm.value.usernamesText).length} 个临时用户名`)
+  } catch {
+    setMessage('账号文件读取失败')
+  }
+}
+
+async function createAdminUsersBatch() {
+  const form = adminBatchCreateForm.value
+  const usernames = parseBatchUsernames(form.usernamesText)
+  if (!usernames.length) {
+    setMessage('请填写或导入至少一个临时用户名')
+    return
+  }
+  if (usernames.length > 200) {
+    setMessage('每批最多创建 200 个账号')
+    return
+  }
+  if (!form.currentPassword) {
+    setMessage('批量创建前请输入当前管理员密码')
+    return
+  }
+  loading.value = true
+  try {
+    const res = await request('/admin/users/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        usernames,
+        role: form.role,
+        quotaBytes: quotaBytesFromGb(form.quotaGb),
+        currentPassword: form.currentPassword
+      })
+    })
+    adminBatchCredentials.value = res.data?.credentials || []
+    form.usernamesText = ''
+    form.currentPassword = ''
+    setMessage(`已创建 ${res.data?.createdCount || 0} 个账号，请立即下载初始凭据`)
+    await loadAdminUsers()
+  } catch (e) {
+    setMessage(e.message)
+  } finally {
+    form.currentPassword = ''
+    loading.value = false
+  }
+}
+
+function csvCell(value) {
+  return `"${String(value ?? '').replaceAll('"', '""')}"`
+}
+
+function downloadAdminBatchCredentials() {
+  if (!adminBatchCredentials.value.length) return
+  const rows = [
+    ['temporary_username', 'temporary_password', 'role', 'quota_bytes'],
+    ...adminBatchCredentials.value.map(item => [
+      item.username,
+      item.temporaryPassword,
+      item.role,
+      item.quotaBytes
+    ])
+  ]
+  const content = '\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\r\n')
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `CloudMind-campus-accounts-${new Date().toISOString().slice(0, 10)}.csv`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function toggleAdminUserSelection(userId) {
+  if (selectedAdminUserIds.value.includes(userId)) {
+    selectedAdminUserIds.value = selectedAdminUserIds.value.filter(id => id !== userId)
+  } else {
+    selectedAdminUserIds.value = [...selectedAdminUserIds.value, userId]
+  }
+}
+
+function toggleAllAdminUsers() {
+  selectedAdminUserIds.value = allSelectableAdminUsersSelected.value
+    ? []
+    : selectableAdminUsers.value.map(item => item.id)
+}
+
+function openAdminBatchDelete() {
+  if (!selectedAdminUserIds.value.length) {
+    setMessage('请先选择要删除的普通用户账号')
+    return
+  }
+  adminBatchDeleteDialog.value = {
+    visible: true,
+    currentPassword: '',
+    confirmText: '',
+    error: '',
+    loading: false
+  }
+}
+
+function closeAdminBatchDelete() {
+  adminBatchDeleteDialog.value = {
+    visible: false,
+    currentPassword: '',
+    confirmText: '',
+    error: '',
+    loading: false
+  }
+}
+
+async function confirmAdminBatchDelete() {
+  const dialog = adminBatchDeleteDialog.value
+  if (!dialog.currentPassword || dialog.confirmText !== 'DELETE') {
+    dialog.error = '请输入当前管理员密码，并准确输入 DELETE'
+    return
+  }
+  dialog.loading = true
+  dialog.error = ''
+  try {
+    const res = await request('/admin/users/batch-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userIds: selectedAdminUserIds.value,
+        currentPassword: dialog.currentPassword,
+        confirmText: dialog.confirmText
+      })
+    })
+    selectedAdminUserIds.value = []
+    dialog.currentPassword = ''
+    dialog.confirmText = ''
+    dialog.visible = false
+    setMessage(`已删除 ${res.data?.deletedCount || 0} 个账号及其全部文件`)
+    await Promise.all([loadAdminUsers(), loadAuditUsers()])
+  } catch (e) {
+    dialog.error = e.message
+  } finally {
+    dialog.currentPassword = ''
+    dialog.loading = false
   }
 }
 
@@ -2110,7 +2337,7 @@ onMounted(async () => {
       const res = await request('/auth/me')
       user.value = res.data
       sessionStorage.setItem('cloudmind-user', JSON.stringify(user.value))
-      if (!mustChangePassword.value) {
+      if (!mustCompleteFirstLogin.value) {
         await Promise.all([loadFiles(null, true), loadMembershipEntitlements()])
       }
     } catch (e) {
@@ -2157,20 +2384,24 @@ onBeforeUnmount(() => {
       </form>
     </section>
 
-    <section v-else-if="mustChangePassword" class="login-screen">
+    <section v-else-if="mustCompleteFirstLogin" class="login-screen">
       <div class="login-visual">
         <AppBrand class="brand-line" />
-        <h1>首次登录，请先设置新密码</h1>
-        <p>管理员引导密码只用于首次部署。修改成功后，原登录令牌会立即失效。</p>
+        <h1>首次登录，请完成账号设置</h1>
+        <p>临时用户名和初始密码只用于首次登录。保存后旧会话会立即失效。</p>
       </div>
-      <form class="login-card" :aria-busy="loading" @submit.prevent="changePassword">
+      <form class="login-card" :aria-busy="loading" @submit.prevent="completeFirstLogin">
         <div class="login-card-head">
           <span class="eyebrow">Security check</span>
-          <h2>修改初始密码</h2>
-          <p>账号：{{ user.username }}</p>
+          <h2>{{ mustChangeUsername ? '修改用户名和初始密码' : '修改初始密码' }}</h2>
+          <p>临时账号：{{ user.username }}</p>
         </div>
         <label for="current-password">当前密码</label>
         <input id="current-password" v-model="currentPassword" type="password" autocomplete="current-password" required />
+        <template v-if="mustChangeUsername">
+          <label for="first-login-username">新的正式用户名</label>
+          <input id="first-login-username" v-model="firstLoginUsername" autocomplete="username" minlength="3" maxlength="32" placeholder="3-32 位中文、字母、数字或下划线" required />
+        </template>
         <label for="new-password">新密码</label>
         <input id="new-password" v-model="newPassword" type="password" autocomplete="new-password" :minlength="isAdmin ? 14 : 6" maxlength="72" required />
         <label for="confirm-password">确认新密码</label>
@@ -2614,18 +2845,52 @@ onBeforeUnmount(() => {
           </section>
 
           <section v-else-if="adminTab === 'users'" class="admin-section">
-            <div class="section-head"><div><span class="eyebrow">User Management</span><h2>用户管理</h2><p>添加用户、封禁账号、重置密码、修改权限等级和 GB 容量。</p></div><button class="soft" @click="loadAdminUsers">刷新</button></div>
+            <div class="section-head">
+              <div><span class="eyebrow">Campus accounts</span><h2>校园账号管理</h2><p>批量创建临时账号；新用户首次登录必须修改用户名和初始密码。</p></div>
+              <div class="head-actions">
+                <button class="danger" :disabled="!selectedAdminUserIds.length" @click="openAdminBatchDelete">批量删除 {{ selectedAdminUserIds.length || '' }}</button>
+                <button class="soft" @click="loadAdminUsers">刷新</button>
+              </div>
+            </div>
+
+            <form class="batch-user-card" @submit.prevent="createAdminUsersBatch">
+              <div class="batch-user-heading">
+                <div><h3>批量创建校园账号</h3><p>每行一个临时用户名，最多 200 个；系统为每个账号生成不同的随机初始密码。</p></div>
+                <label class="file-import-button">导入 TXT / CSV<input type="file" accept=".txt,.csv,text/plain,text/csv" @change="importAdminAccountFile" /></label>
+              </div>
+              <textarea v-model="adminBatchCreateForm.usernamesText" rows="6" placeholder="campus_20260001&#10;campus_20260002&#10;campus_20260003" aria-label="批量临时用户名"></textarea>
+              <div class="batch-user-options">
+                <label>权限等级<select v-model="adminBatchCreateForm.role"><option>USER</option><option>VIP</option><option>SVIP</option></select></label>
+                <label>容量（GB）<input v-model.number="adminBatchCreateForm.quotaGb" type="number" min="0.1" step="0.1" /></label>
+                <label>当前管理员密码<input v-model="adminBatchCreateForm.currentPassword" type="password" autocomplete="current-password" /></label>
+                <button type="submit" :disabled="loading">生成账号与随机初始密码</button>
+              </div>
+              <p class="tip">初始密码只在创建成功后的当前页面显示一次，请立即下载并通过安全渠道分别发给对应用户。</p>
+            </form>
+
+            <section v-if="adminBatchCredentials.length" class="batch-credential-card">
+              <div class="panel-head">
+                <div><h3>本次初始凭据</h3><p>共 {{ adminBatchCredentials.length }} 个。关闭或刷新页面后不再显示明文密码。</p></div>
+                <div class="head-actions"><button @click="downloadAdminBatchCredentials">下载 CSV</button><button class="soft" @click="adminBatchCredentials = []">清除页面明文</button></div>
+              </div>
+              <div class="credential-list">
+                <div class="credential-row head"><span>临时用户名</span><span>随机初始密码</span><span>等级</span></div>
+                <div v-for="item in adminBatchCredentials" :key="item.username" class="credential-row"><code>{{ item.username }}</code><code>{{ item.temporaryPassword }}</code><mark class="role-badge">{{ item.role }}</mark></div>
+              </div>
+            </section>
+
+            <div class="single-user-heading"><h3>单个创建</h3><p>需要临时处理一个账号时使用；该账号同样需要在首次登录时修改用户名和密码。</p></div>
             <div class="create-user-card">
               <input v-model="adminCreateForm.username" aria-label="新用户用户名" placeholder="用户名" />
-              <input v-model="adminCreateForm.password" aria-label="新用户初始密码" placeholder="初始密码" />
+              <input v-model="adminCreateForm.password" type="password" autocomplete="new-password" aria-label="新用户初始密码" placeholder="初始密码" />
               <select v-model="adminCreateForm.role" aria-label="新用户权限等级"><option>USER</option><option>VIP</option><option>SVIP</option><option>ADMIN</option></select>
               <input v-model.number="adminCreateForm.quotaGb" type="number" min="0.1" step="0.1" aria-label="新用户容量（GB）" placeholder="容量 GB" />
               <button @click="createAdminUser">添加用户</button>
             </div>
             <div class="admin-table user-admin-table">
-              <div class="admin-row head"><span>用户</span><span>状态</span><span>容量</span><span>权限</span><span>操作</span></div>
+              <div class="admin-row head"><span class="user-select-cell"><input type="checkbox" aria-label="选择全部普通用户" :checked="allSelectableAdminUsersSelected" @change="toggleAllAdminUsers" />用户</span><span>状态</span><span>容量</span><span>权限</span><span>操作</span></div>
               <div v-for="u in adminUsers" :key="u.id" class="admin-row" :class="{ self: u.isSelf, banned: !u.enabled, abnormal: Number(u.abnormalCount || 0) > 0 }">
-                <span><b>{{ u.username }}</b><small>ID {{ u.id }} · {{ formatTime(u.createdAt) }}</small></span>
+                <span class="user-select-cell"><input type="checkbox" :aria-label="`选择用户 ${u.username}`" :checked="selectedAdminUserIds.includes(u.id)" :disabled="u.isSelf || u.role === 'ADMIN'" @change="toggleAdminUserSelection(u.id)" /><span><b>{{ u.username }}</b><small>ID {{ u.id }} · {{ formatTime(u.createdAt) }}</small></span></span>
                 <span class="status-stack"><mark :class="accountStatusClass(u)">{{ accountStatusText(u) }}</mark><mark :class="contentStatusClass(u)">{{ contentStatusText(u) }} {{ u.abnormalCount || 0 }}</mark></span>
                 <span><b>{{ formatSize(u.usedBytes) }} / {{ formatGbInputLabel(u.quotaBytes) }}</b><div class="thin-bar"><i :style="{ width: percentage(u.usedBytes, u.quotaBytes) + '%' }"></i></div></span>
                 <span><mark class="role-badge">{{ u.role }}</mark></span>
@@ -3023,6 +3288,19 @@ onBeforeUnmount(() => {
               <div><h4>相关资料推荐</h4><p v-if="!relatedItems.length" class="muted">暂无相关资料。</p><button v-for="r in relatedItems" :key="r.id" class="related" @click="previewFile(r)">{{ r.name }}<small>{{ r.summary }}</small></button></div>
               <div><h4>历史版本</h4><p v-if="!versions.length" class="muted">同名覆盖上传后会自动产生历史版本。</p><div v-for="v in versions" :key="v.id" class="version-row"><span>{{ formatTime(v.createdAt) }} · {{ formatSize(v.sizeBytes) }}</span><button class="soft" @click="restoreVersion(v)">恢复此版本</button></div></div>
             </div>
+          </section>
+        </div>
+
+        <div v-if="adminBatchDeleteDialog.visible" class="modal-mask" @click.self="closeAdminBatchDelete">
+          <section class="modal" role="dialog" aria-modal="true" aria-labelledby="batch-delete-users-title">
+            <h3 id="batch-delete-users-title">批量永久删除账号</h3>
+            <p class="danger-note">将永久删除选中的 {{ selectedAdminUserIds.length }} 个普通用户账号、全部文件和有效会话。该操作不可恢复，管理员账号不会进入批量删除范围。</p>
+            <label for="batch-delete-admin-password">当前管理员密码</label>
+            <input id="batch-delete-admin-password" v-model="adminBatchDeleteDialog.currentPassword" type="password" autocomplete="current-password" />
+            <label for="batch-delete-confirm">输入 DELETE 确认</label>
+            <input id="batch-delete-confirm" v-model="adminBatchDeleteDialog.confirmText" autocomplete="off" placeholder="DELETE" />
+            <p v-if="adminBatchDeleteDialog.error" class="message danger" role="alert">{{ adminBatchDeleteDialog.error }}</p>
+            <div class="actions right"><button class="soft" :disabled="adminBatchDeleteDialog.loading" @click="closeAdminBatchDelete">取消</button><button class="danger" :disabled="adminBatchDeleteDialog.loading" @click="confirmAdminBatchDelete">{{ adminBatchDeleteDialog.loading ? '正在删除…' : '永久删除选中账号' }}</button></div>
           </section>
         </div>
 

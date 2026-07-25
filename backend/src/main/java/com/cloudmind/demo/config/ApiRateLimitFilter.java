@@ -179,7 +179,8 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         if ("/api/auth/refresh".equals(path)) {
             return new Policy("refresh", positive(refreshPerMinute), 60_000L, false, false);
         }
-        if ("/api/auth/change-password".equals(path)) {
+        if ("/api/auth/change-password".equals(path)
+                || "/api/auth/complete-first-login".equals(path)) {
             return new Policy(
                     "password-change",
                     positive(passwordChangePer15Minutes),

@@ -1,6 +1,7 @@
 package com.cloudmind.demo.controller;
 
 import com.cloudmind.demo.dto.ChangePasswordRequest;
+import com.cloudmind.demo.dto.CompleteFirstLoginRequest;
 import com.cloudmind.demo.dto.LoginRequest;
 import com.cloudmind.demo.dto.LogoutRequest;
 import com.cloudmind.demo.dto.RefreshTokenRequest;
@@ -131,6 +132,23 @@ public class AuthController {
                 "success", true,
                 "message", "密码修改成功",
                 "data", authService.changePassword(token, request.getCurrentPassword(), request.getNewPassword())
+        );
+    }
+
+    @PostMapping("/complete-first-login")
+    public Map<String, Object> completeFirstLogin(
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @Valid @RequestBody CompleteFirstLoginRequest request
+    ) {
+        return Map.of(
+                "success", true,
+                "message", "首次登录设置完成",
+                "data", authService.completeFirstLogin(
+                        token,
+                        request.getCurrentPassword(),
+                        request.getNewUsername(),
+                        request.getNewPassword()
+                )
         );
     }
 }

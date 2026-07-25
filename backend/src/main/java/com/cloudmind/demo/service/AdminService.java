@@ -1,5 +1,7 @@
 package com.cloudmind.demo.service;
 
+import com.cloudmind.demo.dto.BatchCreateUsersRequest;
+import com.cloudmind.demo.dto.BatchDeleteUsersRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.entity.FileKind;
 import com.cloudmind.demo.repository.AppUserRepository;
@@ -16,9 +18,12 @@ import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class AdminService {
@@ -55,6 +60,57 @@ public class AdminService {
     }
 
     @Transactional
+    public Map<String, Object> createUsersBatch(
+            AppUser admin,
+            BatchCreateUsersRequest request
+    ) {
+        authService.reauthenticateAdmin(admin, request.getCurrentPassword());
+        if ("ADMIN".equalsIgnoreCase(request.getRole())) {
+            throw new IllegalArgumentException("校园账号批量创建不允许授予管理员权限");
+        }
+        List<String> usernames = request.getUsernames();
+        if (usernames == null || usernames.isEmpty() || usernames.size() > 200) {
+            throw new IllegalArgumentException("每批需要创建 1-200 个账号");
+        }
+
+        Set<String> uniqueUsernames = new LinkedHashSet<>();
+        for (String username : usernames) {
+            String normalizedKey = username == null
+                    ? ""
+                    : username.trim().toLowerCase(Locale.ROOT);
+            if (normalizedKey.isBlank()) {
+                throw new IllegalArgumentException("临时用户名不能为空");
+            }
+            if (!uniqueUsernames.add(normalizedKey)) {
+                throw new IllegalArgumentException("批次中存在重复的临时用户名");
+            }
+        }
+
+        List<Map<String, Object>> credentials = new ArrayList<>();
+        for (String username : usernames) {
+            AuthService.CreatedUserCredential created =
+                    authService.createTemporaryUserByAdmin(
+                            username,
+                            request.getRole(),
+                            request.getQuotaBytes()
+                    );
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", created.user().getId());
+            item.put("username", created.user().getUsername());
+            item.put("temporaryPassword", created.temporaryPassword());
+            item.put("role", created.user().getRole());
+            item.put("quotaBytes", created.user().getQuotaBytes());
+            credentials.add(item);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("createdCount", credentials.size());
+        result.put("credentials", credentials);
+        result.put("warning", "初始密码仅在本次响应中显示，请立即安全保存");
+        return result;
+    }
+
+    @Transactional
     public Map<String, Object> updateUser(AppUser admin, Long userId, Map<String, Object> body) {
         String role = body.containsKey("role") ? stringValue(body.get("role")) : null;
         Long quotaBytes = body.containsKey("quotaBytes") ? longValue(body.get("quotaBytes")) : null;
@@ -80,6 +136,54 @@ public class AdminService {
         fileService.adminPurgeAllFilesOfUser(user.getId());
         authService.deleteTokensForUser(user.getId());
         userRepository.delete(user);
+    }
+
+    @Transactional
+    public Map<String, Object> deleteUsersBatch(
+            AppUser admin,
+            BatchDeleteUsersRequest request
+    ) {
+        authService.reauthenticateAdmin(admin, request.getCurrentPassword());
+        if (!"DELETE".equals(request.getConfirmText())) {
+            throw new IllegalArgumentException("批量删除确认文本不正确");
+        }
+
+        List<Long> requestedIds = request.getUserIds();
+        if (requestedIds == null || requestedIds.isEmpty() || requestedIds.size() > 100) {
+            throw new IllegalArgumentException("每批需要删除 1-100 个账号");
+        }
+        LinkedHashSet<Long> uniqueIds = new LinkedHashSet<>(requestedIds);
+        if (uniqueIds.contains(null) || uniqueIds.size() != requestedIds.size()) {
+            throw new IllegalArgumentException("用户 ID 不能为空或重复");
+        }
+
+        List<AppUser> users = userRepository.findAllById(uniqueIds);
+        if (users.size() != uniqueIds.size()) {
+            throw new IllegalArgumentException("部分用户不存在，请刷新列表后重试");
+        }
+        users.sort(Comparator.comparing(AppUser::getId));
+        for (AppUser user : users) {
+            if (admin.getId().equals(user.getId())) {
+                throw new IllegalArgumentException("不能批量删除当前登录的管理员账号");
+            }
+            if (authService.isAdmin(user)) {
+                throw new IllegalArgumentException("为避免锁死后台，管理员账号不能批量删除");
+            }
+        }
+
+        List<String> deletedUsernames = users.stream()
+                .map(AppUser::getUsername)
+                .toList();
+        for (AppUser user : users) {
+            fileService.adminPurgeAllFilesOfUser(user.getId());
+            authService.deleteTokensForUser(user.getId());
+        }
+        userRepository.deleteAll(users);
+
+        return Map.of(
+                "deletedCount", users.size(),
+                "deletedUsernames", deletedUsernames
+        );
     }
 
     public List<Map<String, Object>> auditUsers(AppUser admin) {
@@ -231,6 +335,12 @@ public class AdminService {
         map.put("role", user.getRole());
         map.put("permissionLevel", user.getRole());
         map.put("enabled", user.getEnabled());
+        map.put("mustChangePassword", user.getPasswordChangedAt() == null);
+        map.put("mustChangeUsername", user.getUsernameChangedAt() == null);
+        map.put(
+                "mustCompleteFirstLogin",
+                user.getPasswordChangedAt() == null || user.getUsernameChangedAt() == null
+        );
         map.put("quotaBytes", quota);
         map.put("usedBytes", used);
         map.put("remainingBytes", Math.max(0L, quota - used));

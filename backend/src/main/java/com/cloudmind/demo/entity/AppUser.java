@@ -13,6 +13,9 @@ public class AppUser {
     @Column(nullable = false, unique = true, length = 64)
     private String username;
 
+    @Column(name = "username_changed_at")
+    private Instant usernameChangedAt;
+
     @Column(nullable = false, length = 128)
     private String passwordHash;
 
@@ -60,6 +63,8 @@ public class AppUser {
     public void setId(Long id) { this.id = id; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
+    public Instant getUsernameChangedAt() { return usernameChangedAt; }
+    public void setUsernameChangedAt(Instant usernameChangedAt) { this.usernameChangedAt = usernameChangedAt; }
     public String getPasswordHash() { return passwordHash; }
     public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
     public String getSalt() { return salt; }

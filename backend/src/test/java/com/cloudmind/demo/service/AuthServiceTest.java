@@ -93,6 +93,7 @@ class AuthServiceTest {
         assertTrue(passwordEncoder.matches("safe-password", user.getPasswordHash()));
         assertEquals("", user.getSalt());
         assertNotNull(user.getPasswordChangedAt());
+        assertNotNull(user.getUsernameChangedAt());
     }
 
     @Test
@@ -122,6 +123,7 @@ class AuthServiceTest {
         assertEquals("ADMIN", admin.getRole());
         assertTrue(passwordEncoder.matches("A-strong-bootstrap-password", admin.getPasswordHash()));
         assertNull(admin.getPasswordChangedAt());
+        assertNotNull(admin.getUsernameChangedAt());
     }
 
     @Test
@@ -148,6 +150,62 @@ class AuthServiceTest {
         assertEquals(admin, authService.requireUser(newToken));
         assertNotNull(admin.getPasswordChangedAt());
         assertTrue(passwordEncoder.matches("A-new-secure-password", admin.getPasswordHash()));
+    }
+
+    @Test
+    void adminCreatedUserMustReplaceTemporaryUsernameAndPasswordTogether() {
+        AppUser user = user(21L, "campus_temp_001", "USER");
+        user.setPasswordHash(passwordEncoder.encode("CM-initial-password"));
+        user.setSalt("");
+        user.setUsernameChangedAt(null);
+        user.setPasswordChangedAt(null);
+        when(userRepository.findByUsername("campus_temp_001")).thenReturn(Optional.of(user));
+        when(userRepository.existsByUsername("student_001")).thenReturn(false);
+
+        Map<String, Object> login = authService.login(
+                "campus_temp_001",
+                "CM-initial-password"
+        );
+        String oldToken = String.valueOf(login.get("accessToken"));
+        assertThrows(SecurityException.class, () -> authService.requireUser(oldToken));
+
+        Map<String, Object> completed = authService.completeFirstLogin(
+                oldToken,
+                "CM-initial-password",
+                "student_001",
+                "student-new-password"
+        );
+        String newToken = String.valueOf(completed.get("accessToken"));
+
+        assertEquals("student_001", user.getUsername());
+        assertNotNull(user.getUsernameChangedAt());
+        assertNotNull(user.getPasswordChangedAt());
+        assertTrue(passwordEncoder.matches("student-new-password", user.getPasswordHash()));
+        assertThrows(SecurityException.class, () -> authService.requireSessionUser(oldToken));
+        assertEquals(user, authService.requireUser(newToken));
+    }
+
+    @Test
+    void generatedCampusCredentialUsesUniqueStrongTemporaryPassword() {
+        when(userRepository.existsByUsername("campus_temp_002")).thenReturn(false);
+
+        AuthService.CreatedUserCredential created =
+                authService.createTemporaryUserByAdmin(
+                        "campus_temp_002",
+                        "USER",
+                        5L * 1024 * 1024 * 1024
+                );
+
+        assertEquals("campus_temp_002", created.user().getUsername());
+        assertEquals("USER", created.user().getRole());
+        assertTrue(created.temporaryPassword().startsWith("CM-"));
+        assertTrue(created.temporaryPassword().length() >= 18);
+        assertTrue(passwordEncoder.matches(
+                created.temporaryPassword(),
+                created.user().getPasswordHash()
+        ));
+        assertNull(created.user().getUsernameChangedAt());
+        assertNull(created.user().getPasswordChangedAt());
     }
 
     @Test
@@ -377,6 +435,7 @@ class AuthServiceTest {
         user.setRole(role);
         user.setEnabled(true);
         user.setQuotaBytes(10L * 1024 * 1024 * 1024);
+        user.setUsernameChangedAt(Instant.now());
         return user;
     }
 

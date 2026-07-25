@@ -63,6 +63,7 @@ public class AuthService {
         }
         AppUser user = new AppUser();
         user.setUsername(username);
+        user.setUsernameChangedAt(Instant.now());
         setPassword(user, password, true);
         user.setRole("USER");
         user.setQuotaBytes(defaultQuotaBytes);
@@ -120,8 +121,8 @@ public class AuthService {
 
     public AppUser requireUser(String token) {
         AppUser user = requireSessionUser(token);
-        if (user.getPasswordChangedAt() == null) {
-            throw new SecurityException("首次登录必须先修改密码");
+        if (user.getPasswordChangedAt() == null || user.getUsernameChangedAt() == null) {
+            throw new SecurityException("首次登录必须先修改用户名和初始密码");
         }
         return user;
     }
@@ -267,6 +268,11 @@ public class AuthService {
         result.put("quotaBytes", user.getQuotaBytes());
         result.put("enabled", user.getEnabled());
         result.put("mustChangePassword", user.getPasswordChangedAt() == null);
+        result.put("mustChangeUsername", user.getUsernameChangedAt() == null);
+        result.put(
+                "mustCompleteFirstLogin",
+                user.getPasswordChangedAt() == null || user.getUsernameChangedAt() == null
+        );
         result.put("membershipExpiresAt", user.getMembershipExpiresAt());
         result.put("membershipFallbackRole", user.getMembershipFallbackRole());
         return result;
@@ -293,6 +299,7 @@ public class AuthService {
         }
         AppUser admin = new AppUser();
         admin.setUsername(normalized);
+        admin.setUsernameChangedAt(Instant.now());
         setPassword(admin, password, false);
         admin.setRole("ADMIN");
         admin.setQuotaBytes(defaultQuotaBytes);
@@ -317,12 +324,57 @@ public class AuthService {
     }
 
     @Transactional
+    public Map<String, Object> completeFirstLogin(
+            String token,
+            String currentPassword,
+            String newUsername,
+            String newPassword
+    ) {
+        AppUser user = requireSessionUser(token);
+        boolean usernameChangeRequired = user.getUsernameChangedAt() == null;
+        boolean passwordChangeRequired = user.getPasswordChangedAt() == null;
+        if (!usernameChangeRequired && !passwordChangeRequired) {
+            throw new IllegalArgumentException("首次登录设置已经完成");
+        }
+        if (!passwordMatches(user, currentPassword)) {
+            throw new IllegalArgumentException("当前密码错误");
+        }
+
+        String normalizedUsername = null;
+        if (usernameChangeRequired) {
+            normalizedUsername = normalizeUsername(newUsername);
+            if (normalizedUsername.equalsIgnoreCase(user.getUsername())) {
+                throw new IllegalArgumentException("新用户名不能与临时用户名相同");
+            }
+            if (userRepository.existsByUsername(normalizedUsername)) {
+                throw new IllegalArgumentException("用户名已存在");
+            }
+        }
+
+        if (isAdmin(user)) validateAdminPassword(newPassword);
+        else validatePassword(newPassword);
+        if (passwordMatches(user, newPassword)) {
+            throw new IllegalArgumentException("新密码不能与初始密码相同");
+        }
+
+        if (usernameChangeRequired) {
+            user.setUsername(normalizedUsername);
+        }
+        user.setUsernameChangedAt(Instant.now());
+        setPassword(user, newPassword, true);
+        userRepository.save(user);
+        revokeTokens(user.getId());
+        return issueSession(user, UUID.randomUUID().toString());
+    }
+
+    @Transactional
     public AppUser createUserByAdmin(String username, String password, String role, Long quotaBytes) {
         username = normalizeUsername(username);
         validatePassword(password);
         if (userRepository.existsByUsername(username)) throw new IllegalArgumentException("用户名已存在");
         AppUser user = new AppUser();
         user.setUsername(username);
+        user.setUsernameChangedAt(null);
         user.setRole(normalizeRole(role));
         if (isAdmin(user)) validateAdminPassword(password);
         setPassword(user, password, false);
@@ -330,6 +382,19 @@ public class AuthService {
         user.setEnabled(true);
         return userRepository.save(user);
     }
+
+    @Transactional
+    public CreatedUserCredential createTemporaryUserByAdmin(
+            String username,
+            String role,
+            Long quotaBytes
+    ) {
+        String temporaryPassword = randomPassword();
+        AppUser user = createUserByAdmin(username, temporaryPassword, role, quotaBytes);
+        return new CreatedUserCredential(user, temporaryPassword);
+    }
+
+    public record CreatedUserCredential(AppUser user, String temporaryPassword) {}
 
     @Transactional
     public AppUser updateUserByAdmin(Long userId, String role, Long quotaBytes) {

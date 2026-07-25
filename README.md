@@ -111,11 +111,18 @@ mysql -u <管理员> -p <数据库名> < backend/deploy/002-auth-token-security.
 mysql -u <管理员> -p <数据库名> < backend/deploy/003-security-batch3.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/004-security-batch4.sql
 mysql -u <管理员> -p <数据库名> < backend/deploy/005-invite-codes.sql
+mysql -u <管理员> -p <数据库名> < backend/deploy/006-campus-pilot-controls.sql
+mysql -u <管理员> -p <数据库名> < backend/deploy/007-membership-validity.sql
+mysql -u <管理员> -p <数据库名> < backend/deploy/008-campus-account-onboarding.sql
 ```
 
 第二批安全加固启用了 Spring Security 统一鉴权、30 分钟访问令牌、
 7 天刷新令牌轮换、服务端注销与令牌清理。浏览器只在当前标签会话中
 保存令牌，关闭标签页后不会继续保留登录凭据。
+
+管理员批量创建的校园账号会获得互不相同的随机初始密码；初始凭据只在
+创建响应中显示一次。新用户首次登录后必须同时替换临时用户名和初始密码，
+完成前不能访问文件、AI 或管理接口。
 
 上传文件必须同时通过扩展名白名单和服务端实际内容类型检测；默认单文件
 上限为 100MB。登录、注册、刷新令牌、改密、上传和 AI 问答接口均有限流，

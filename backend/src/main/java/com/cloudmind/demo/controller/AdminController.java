@@ -1,10 +1,13 @@
 package com.cloudmind.demo.controller;
 
+import com.cloudmind.demo.dto.BatchCreateUsersRequest;
+import com.cloudmind.demo.dto.BatchDeleteUsersRequest;
 import com.cloudmind.demo.entity.AppUser;
 import com.cloudmind.demo.service.AdminService;
 import com.cloudmind.demo.service.AiConfigService;
 import com.cloudmind.demo.service.AuthService;
 import com.cloudmind.demo.service.FileService;
+import jakarta.validation.Valid;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -40,6 +43,32 @@ public class AdminController {
                                           @RequestBody Map<String, Object> body) {
         AppUser admin = authService.requireAdmin(token);
         return Map.of("success", true, "message", "用户创建成功", "data", adminService.createUser(admin, body));
+    }
+
+    @PostMapping("/users/batch")
+    public Map<String, Object> createUsersBatch(
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @Valid @RequestBody BatchCreateUsersRequest request
+    ) {
+        AppUser admin = authService.requireAdmin(token);
+        return Map.of(
+                "success", true,
+                "message", "校园账号批量创建成功",
+                "data", adminService.createUsersBatch(admin, request)
+        );
+    }
+
+    @PostMapping("/users/batch-delete")
+    public Map<String, Object> deleteUsersBatch(
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @Valid @RequestBody BatchDeleteUsersRequest request
+    ) {
+        AppUser admin = authService.requireAdmin(token);
+        return Map.of(
+                "success", true,
+                "message", "选中账号及其文件已批量删除",
+                "data", adminService.deleteUsersBatch(admin, request)
+        );
     }
 
     @PutMapping("/users/{userId}")

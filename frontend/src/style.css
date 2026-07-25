@@ -531,6 +531,46 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
 .section-head h2 { margin: 6px 0; }
 .section-head p { margin: 0; color: var(--muted); }
 .head-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.batch-user-card, .batch-credential-card {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #f8fbff;
+}
+.batch-user-heading, .batch-credential-card .panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.batch-user-heading h3, .batch-user-heading p, .single-user-heading h3, .single-user-heading p, .batch-credential-card h3, .batch-credential-card p { margin: 0; }
+.batch-user-heading p, .single-user-heading p, .batch-credential-card p { margin-top: 5px; color: var(--muted); }
+.batch-user-card textarea { width: 100%; resize: vertical; min-height: 130px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.65; }
+.file-import-button {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 9px 13px;
+  border: 1px solid #bfd3f7;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--primary);
+  cursor: pointer;
+  font-weight: 800;
+}
+.file-import-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.batch-user-options { display: grid; grid-template-columns: 130px 140px minmax(210px, 1fr) auto; gap: 12px; align-items: end; margin-top: 12px; }
+.batch-user-options label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 800; }
+.batch-user-options button { min-height: 43px; }
+.batch-user-card .tip { margin: 12px 0 0; }
+.batch-credential-card { background: #fffdf4; border-color: #f1d48a; }
+.credential-list { max-height: 330px; overflow: auto; border: 1px solid #ead7a9; border-radius: 12px; background: #fff; }
+.credential-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(210px, 1.2fr) 90px; gap: 14px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); }
+.credential-row:first-child { border-top: 0; }
+.credential-row.head { position: sticky; top: 0; z-index: 1; background: #fffaf0; color: var(--muted); font-weight: 900; }
+.credential-row code { overflow-wrap: anywhere; color: var(--text); }
+.single-user-heading { margin: 20px 0 10px; }
 .create-user-card { display: grid; grid-template-columns: 1.2fr 1fr 120px 120px auto; gap: 10px; margin-bottom: 16px; }
 .admin-table { border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #fff; }
 .admin-row { display: grid; grid-template-columns: minmax(220px, 1.1fr) 170px minmax(220px, 1fr) 100px minmax(350px, auto); gap: 14px; align-items: center; padding: 14px 16px; border-top: 1px solid var(--line); }
@@ -539,6 +579,9 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
 .admin-row.banned { background: #fff8f9; }
 .admin-row.abnormal:not(.banned) { background: #fffbf2; }
 .admin-row small { display: block; color: var(--muted); margin-top: 4px; }
+.user-select-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.user-select-cell > input { width: 17px; height: 17px; flex: 0 0 auto; margin: 0; accent-color: var(--primary); }
+.user-select-cell > span { min-width: 0; }
 .status-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .admin-actions { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
 .admin-actions button { padding: 7px 9px; font-size: 12px; }
@@ -581,6 +624,7 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
 .modal { width: min(560px, 100%); max-height: 92vh; overflow: auto; background: #fff; border-radius: 24px; padding: 22px; box-shadow: 0 30px 80px rgba(0,0,0,.28); }
 .modal.large { width: min(1160px, 100%); }
 .modal h3 { margin: 0 0 10px; }
+.danger-note { padding: 12px 14px; border: 1px solid #fecdd3; border-radius: 12px; background: #fff1f2; color: #9f1239; line-height: 1.65; }
 .modal-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
 .modal-head p { margin: 6px 0 0; color: var(--muted); }
 .summary-box { background: #f7fbff; border: 1px solid var(--line); border-radius: 16px; padding: 13px; color: #41516b; line-height: 1.7; }
@@ -1114,6 +1158,7 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .knowledge-source-panel { min-height: auto; }
   .create-user-card { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .create-user-card button { width: max-content; }
+  .batch-user-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .invite-admin-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -1199,6 +1244,9 @@ mark.role-badge { background: #eff2ff; color: #3651d4; }
   .audit-layout { grid-template-columns: minmax(0, 1fr); }
   .audit-users-card { max-height: 320px; }
   .create-user-card, .ai-form { grid-template-columns: minmax(0, 1fr); }
+  .batch-user-heading, .batch-credential-card .panel-head { flex-direction: column; align-items: stretch; }
+  .batch-user-options, .credential-row { grid-template-columns: minmax(0, 1fr); }
+  .credential-row.head { display: none; }
   .admin-row, .audit-table .file-row, .disk-row { grid-template-columns: minmax(0, 1fr); border-radius: 12px; }
   .admin-table, .disk-table { display: grid; gap: 10px; border: 0; background: transparent; overflow: visible; }
   .admin-row:not(.head), .disk-row:not(.head) { border: 1px solid var(--line); background: #fff; }
