@@ -70,8 +70,29 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         }
 
         long now = clock.millis();
+        List<String> clientKeys = clientKeys(request, policy);
+        if (policy.failureOnly()) {
+            long retryAfterSeconds = retryAfterForExistingFailures(
+                    policy,
+                    clientKeys,
+                    now
+            );
+            if (retryAfterSeconds > 0L) {
+                reject(response, retryAfterSeconds);
+                return;
+            }
+            filterChain.doFilter(request, response);
+            if (response.getStatus() >= 400 && response.getStatus() < 500) {
+                for (String clientKey : clientKeys) {
+                    consume(policy.name() + ":" + clientKey, policy, now);
+                }
+            }
+            cleanupExpiredWindows(now);
+            return;
+        }
+
         long retryAfterSeconds = 0L;
-        for (String clientKey : clientKeys(request, policy)) {
+        for (String clientKey : clientKeys) {
             WindowState state = consume(policy.name() + ":" + clientKey, policy, now);
             if (state.count() > policy.limit()) {
                 retryAfterSeconds = Math.max(
@@ -84,24 +105,57 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
             }
         }
 
-        if (windows.size() > 10_000) {
-            windows.entrySet().removeIf(entry ->
-                    now - entry.getValue().windowStartedAt() > 3_600_000L);
-        }
+        cleanupExpiredWindows(now);
 
         if (retryAfterSeconds > 0L) {
-            response.setStatus(429);
-            response.setHeader("Retry-After", String.valueOf(retryAfterSeconds));
-            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            objectMapper.writeValue(
-                    response.getOutputStream(),
-                    Map.of("success", false, "message", "请求过于频繁，请稍后再试")
-            );
+            reject(response, retryAfterSeconds);
             return;
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private long retryAfterForExistingFailures(
+            Policy policy,
+            List<String> clientKeys,
+            long now
+    ) {
+        long retryAfterSeconds = 0L;
+        for (String clientKey : clientKeys) {
+            WindowState state = windows.get(policy.name() + ":" + clientKey);
+            if (state == null || now - state.windowStartedAt() >= policy.windowMillis()) {
+                continue;
+            }
+            if (state.count() >= policy.limit()) {
+                retryAfterSeconds = Math.max(
+                        retryAfterSeconds,
+                        Math.max(
+                                1L,
+                                (policy.windowMillis() - (now - state.windowStartedAt()) + 999L) / 1000L
+                        )
+                );
+            }
+        }
+        return retryAfterSeconds;
+    }
+
+    private void cleanupExpiredWindows(long now) {
+        if (windows.size() > 10_000) {
+            windows.entrySet().removeIf(entry ->
+                    now - entry.getValue().windowStartedAt() > 3_600_000L);
+        }
+    }
+
+    private void reject(HttpServletResponse response, long retryAfterSeconds)
+            throws IOException {
+        response.setStatus(429);
+        response.setHeader("Retry-After", String.valueOf(retryAfterSeconds));
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        objectMapper.writeValue(
+                response.getOutputStream(),
+                Map.of("success", false, "message", "请求过于频繁，请稍后再试")
+        );
     }
 
     private WindowState consume(String key, Policy policy, long now) {
@@ -117,25 +171,37 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         if (!"POST".equalsIgnoreCase(request.getMethod())) return null;
         String path = request.getRequestURI();
         if ("/api/auth/login".equals(path)) {
-            return new Policy("login", positive(loginPerMinute), 60_000L, false);
+            return new Policy("login", positive(loginPerMinute), 60_000L, false, false);
         }
         if ("/api/auth/register".equals(path)) {
-            return new Policy("register", positive(registerPerHour), 3_600_000L, false);
+            return new Policy("register", positive(registerPerHour), 3_600_000L, false, false);
         }
         if ("/api/auth/refresh".equals(path)) {
-            return new Policy("refresh", positive(refreshPerMinute), 60_000L, false);
+            return new Policy("refresh", positive(refreshPerMinute), 60_000L, false, false);
         }
         if ("/api/auth/change-password".equals(path)) {
-            return new Policy("password-change", positive(passwordChangePer15Minutes), 900_000L, true);
+            return new Policy(
+                    "password-change",
+                    positive(passwordChangePer15Minutes),
+                    900_000L,
+                    true,
+                    false
+            );
         }
         if ("/api/invites/redeem".equals(path)) {
-            return new Policy("invite-redeem", positive(inviteRedeemPer15Minutes), 900_000L, true);
+            return new Policy(
+                    "invite-redeem",
+                    positive(inviteRedeemPer15Minutes),
+                    900_000L,
+                    true,
+                    true
+            );
         }
         if (path.startsWith("/api/files/upload")) {
-            return new Policy("upload", positive(uploadPerMinute), 60_000L, true);
+            return new Policy("upload", positive(uploadPerMinute), 60_000L, true, false);
         }
         if ("/api/knowledge/ask".equals(path) || "/api/knowledge/overview".equals(path)) {
-            return new Policy("ai", positive(aiPerMinute), 60_000L, true);
+            return new Policy("ai", positive(aiPerMinute), 60_000L, true, false);
         }
         return null;
     }
@@ -162,6 +228,12 @@ public class ApiRateLimitFilter extends OncePerRequestFilter {
         return Math.max(1, value);
     }
 
-    private record Policy(String name, int limit, long windowMillis, boolean dualDimension) {}
+    private record Policy(
+            String name,
+            int limit,
+            long windowMillis,
+            boolean dualDimension,
+            boolean failureOnly
+    ) {}
     private record WindowState(long windowStartedAt, int count) {}
 }

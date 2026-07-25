@@ -41,12 +41,27 @@ public class AdminInviteCodeController {
 
     @GetMapping
     public Map<String, Object> batches(
-            @RequestHeader(value = "X-Token", required = false) String token
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) String role,
+            @RequestParam(required = false) String status
     ) {
         AppUser admin = authService.requireAdmin(token);
         return Map.of(
                 "success", true,
-                "data", inviteCodeService.listBatches(admin)
+                "data", inviteCodeService.listBatches(admin, query, role, status)
+        );
+    }
+
+    @GetMapping("/{batchId}/codes")
+    public Map<String, Object> batchCodes(
+            @RequestHeader(value = "X-Token", required = false) String token,
+            @PathVariable Long batchId
+    ) {
+        AppUser admin = authService.requireAdmin(token);
+        return Map.of(
+                "success", true,
+                "data", inviteCodeService.batchCodes(admin, batchId)
         );
     }
 

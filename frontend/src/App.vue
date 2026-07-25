@@ -105,6 +105,15 @@ const adminInviteBatches = ref([])
 const adminInviteStatus = ref(null)
 const adminInviteAudit = ref([])
 const adminInviteLoading = ref(false)
+const adminInviteFilters = ref({ query: '', role: '', status: '' })
+const adminInviteDetail = ref({
+  visible: false,
+  batch: null,
+  codes: [],
+  truncated: false,
+  loading: false,
+  error: ''
+})
 const adminInviteForm = ref({
   role: 'VIP',
   count: 20,
@@ -1585,8 +1594,14 @@ async function redeemInviteCode() {
 async function loadAdminInviteBatches(showLoading = true) {
   if (showLoading) adminInviteLoading.value = true
   try {
+    const params = new URLSearchParams()
+    const filters = adminInviteFilters.value
+    if (String(filters.query || '').trim()) params.set('query', String(filters.query).trim())
+    if (filters.role) params.set('role', filters.role)
+    if (filters.status) params.set('status', filters.status)
+    const queryString = params.toString()
     const [batchesRes, statusRes, auditRes] = await Promise.all([
-      request('/admin/invite-batches'),
+      request(`/admin/invite-batches${queryString ? `?${queryString}` : ''}`),
       request('/admin/invite-batches/status'),
       request('/admin/invite-batches/audit')
     ])
@@ -1598,6 +1613,43 @@ async function loadAdminInviteBatches(showLoading = true) {
   } finally {
     if (showLoading) adminInviteLoading.value = false
   }
+}
+
+async function resetAdminInviteFilters() {
+  adminInviteFilters.value = { query: '', role: '', status: '' }
+  await loadAdminInviteBatches()
+}
+
+function inviteCodeStatusText(status) {
+  if (status === 'REDEEMED') return '已兑换'
+  if (status === 'REVOKED') return '已撤销'
+  if (status === 'EXPIRED') return '已过期'
+  return '未使用'
+}
+
+async function openAdminInviteDetail(batch) {
+  adminInviteDetail.value = {
+    visible: true,
+    batch,
+    codes: [],
+    truncated: false,
+    loading: true,
+    error: ''
+  }
+  try {
+    const res = await request(`/admin/invite-batches/${batch.id}/codes`)
+    adminInviteDetail.value.codes = Array.isArray(res.data?.codes) ? res.data.codes : []
+    adminInviteDetail.value.truncated = Boolean(res.data?.truncated)
+  } catch (e) {
+    adminInviteDetail.value.error = e.message
+  } finally {
+    adminInviteDetail.value.loading = false
+  }
+}
+
+function closeAdminInviteDetail() {
+  if (adminInviteDetail.value.loading) return
+  adminInviteDetail.value.visible = false
 }
 
 function inviteBatchStatusText(batch) {
@@ -2687,9 +2739,35 @@ onBeforeUnmount(() => {
             </div>
 
             <section class="invite-batch-card">
-              <div class="panel-head"><div><h3>最近批次</h3><p>这里只显示状态和数量，不保存或回显明文邀请码。</p></div></div>
+              <div class="panel-head">
+                <div><h3>最近批次</h3><p>支持按批次号、备注、等级和状态筛选；逐码明细只显示脱敏指纹。</p></div>
+              </div>
+              <form class="invite-batch-toolbar" @submit.prevent="loadAdminInviteBatches">
+                <label>搜索批次
+                  <input v-model="adminInviteFilters.query" maxlength="80" placeholder="批次号或备注" />
+                </label>
+                <label>会员等级
+                  <select v-model="adminInviteFilters.role">
+                    <option value="">全部等级</option>
+                    <option value="VIP">VIP</option>
+                    <option value="SVIP">SVIP</option>
+                  </select>
+                </label>
+                <label>批次状态
+                  <select v-model="adminInviteFilters.status">
+                    <option value="">全部状态</option>
+                    <option value="ACTIVE">有效</option>
+                    <option value="EXPIRED">已过期</option>
+                    <option value="REVOKED">已撤销</option>
+                  </select>
+                </label>
+                <div class="invite-filter-actions">
+                  <button type="submit" :disabled="adminInviteLoading">筛选</button>
+                  <button type="button" class="soft" :disabled="adminInviteLoading" @click="resetAdminInviteFilters">清空</button>
+                </div>
+              </form>
               <div v-if="adminInviteLoading && !adminInviteBatches.length" class="empty"><LoaderCircle class="spin" :size="18" />正在读取邀请码批次…</div>
-              <div v-else-if="!adminInviteBatches.length" class="empty">还没有邀请码批次。生成后会在这里显示记录。</div>
+              <div v-else-if="!adminInviteBatches.length" class="empty">没有符合条件的批次，请调整筛选条件。</div>
               <div v-else class="invite-batch-table">
                 <div class="invite-batch-row head"><span>批次</span><span>等级</span><span>使用情况</span><span>邀请码截止</span><span>状态</span></div>
                 <div v-for="batch in adminInviteBatches" :key="batch.id" class="invite-batch-row">
@@ -2699,6 +2777,7 @@ onBeforeUnmount(() => {
                   <span><b>{{ formatTime(batch.expiresAt) }}</b><small>会员期 {{ membershipPeriodText(batch.membershipDays) }} · 生成于 {{ formatTime(batch.createdAt) }}</small></span>
                   <span class="invite-row-status">
                     <mark class="invite-status" :class="inviteBatchStatusClass(batch)">{{ inviteBatchStatusText(batch) }}</mark>
+                    <button class="link" @click="openAdminInviteDetail(batch)">查看明细</button>
                     <button v-if="batch.status === 'ACTIVE' && batch.remainingCount > 0" class="link danger-link" @click="openInviteBatchRevokeDialog(batch)">撤销批次</button>
                     <small v-if="batch.revokeReason">{{ batch.revokeReason }}</small>
                   </span>
@@ -2835,6 +2914,32 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </form>
+        </div>
+
+        <div v-if="adminInviteDetail.visible" class="modal-mask" @click.self="closeAdminInviteDetail">
+          <section class="modal invite-detail-modal" role="dialog" aria-modal="true" aria-labelledby="invite-detail-title" @keydown.esc.stop="closeAdminInviteDetail">
+            <header class="modal-head">
+              <div>
+                <span class="eyebrow">Masked delivery records</span>
+                <h3 id="invite-detail-title">邀请码逐码明细</h3>
+                <p>{{ adminInviteDetail.batch?.batchNo }} · 不回显明文邀请码，仅用于售后核验和异常追踪。</p>
+              </div>
+              <button type="button" class="soft" :disabled="adminInviteDetail.loading" aria-label="关闭邀请码明细" @click="closeAdminInviteDetail"><X :size="17" />关闭</button>
+            </header>
+            <div v-if="adminInviteDetail.loading" class="empty"><LoaderCircle class="spin" :size="18" />正在读取脱敏明细…</div>
+            <p v-else-if="adminInviteDetail.error" class="message inline danger" role="alert">{{ adminInviteDetail.error }}</p>
+            <div v-else-if="!adminInviteDetail.codes.length" class="empty">该批次暂无邀请码记录。</div>
+            <div v-else class="invite-code-detail-list">
+              <div class="invite-code-detail-row head"><span>脱敏指纹</span><span>状态</span><span>兑换账号</span><span>时间</span></div>
+              <div v-for="code in adminInviteDetail.codes" :key="code.id" class="invite-code-detail-row">
+                <span><b>#{{ code.codeFingerprint }}</b><small>无法还原明文邀请码</small></span>
+                <span><mark class="invite-code-status" :class="String(code.status).toLowerCase()">{{ inviteCodeStatusText(code.status) }}</mark><small v-if="code.revokeReason">{{ code.revokeReason }}</small></span>
+                <span><b>{{ code.redeemedBy || '—' }}</b><small>{{ code.redeemedBy ? '账号已脱敏' : '尚未兑换' }}</small></span>
+                <span><b>{{ formatTime(code.redeemedAt || code.revokedAt || code.createdAt) }}</b><small>{{ code.redeemedAt ? '兑换时间' : (code.revokedAt ? '撤销时间' : '生成时间') }}</small></span>
+              </div>
+            </div>
+            <p v-if="adminInviteDetail.truncated" class="invite-detail-tip">为控制管理接口负载，本页最多显示前 200 条记录。</p>
+          </section>
         </div>
 
         <div v-if="inviteRedeemDialog.visible" class="modal-mask" @click.self="closeInviteRedeemDialog">

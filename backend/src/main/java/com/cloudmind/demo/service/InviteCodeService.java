@@ -189,13 +189,52 @@ public class InviteCodeService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listBatches(AppUser admin) {
+        return listBatches(admin, null, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listBatches(
+            AppUser admin,
+            String query,
+            String role,
+            String status
+    ) {
         if (admin == null || !authService.isAdmin(admin)) {
             throw new SecurityException("需要管理员权限");
         }
         Instant now = Instant.now();
+        String normalizedQuery = normalizeBatchQuery(query);
+        String normalizedRole = normalizeBatchRoleFilter(role);
+        String normalizedStatus = normalizeBatchStatusFilter(status);
         return batchRepository.findTop100ByOrderByCreatedAtDesc().stream()
+                .filter(batch -> matchesBatchQuery(batch, normalizedQuery))
+                .filter(batch -> normalizedRole.isBlank()
+                        || normalizedRole.equalsIgnoreCase(batch.getTargetRole()))
+                .filter(batch -> normalizedStatus.isBlank()
+                        || normalizedStatus.equals(batchStatus(batch, now)))
                 .map(batch -> toBatchMap(batch, now))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> batchCodes(AppUser admin, Long batchId) {
+        if (admin == null || !authService.isAdmin(admin)) {
+            throw new SecurityException("需要管理员权限");
+        }
+        InviteCodeBatch batch = batchRepository.findById(batchId)
+                .orElseThrow(() -> new IllegalArgumentException("邀请码批次不存在"));
+        Instant now = Instant.now();
+        List<Map<String, Object>> codes = codeRepository
+                .findTop200ByBatch_IdOrderByIdAsc(batchId)
+                .stream()
+                .map(code -> toCodeMap(code, batch, now))
+                .toList();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("batch", toBatchMap(batch, now));
+        result.put("codes", codes);
+        result.put("truncated", batch.getTotalCount() != null
+                && batch.getTotalCount() > codes.size());
+        return result;
     }
 
     @Transactional(readOnly = true)
@@ -351,7 +390,7 @@ public class InviteCodeService {
             int currentRank = membershipRank(user.getRole());
             int targetRank = membershipRank(targetRole);
             if (currentRank > targetRank || currentRank == targetRank && !activeTemporaryMembership) {
-                throw new IllegalArgumentException("当前会员等级无需使用该邀请码");
+                throw unavailableCode();
             }
 
             long targetQuota = membershipEntitlementService.storageQuotaBytes(targetRole);
@@ -405,11 +444,7 @@ public class InviteCodeService {
         result.put("redeemedCount", redeemedCount);
         result.put("revokedCount", revokedCount);
         result.put("remainingCount", Math.max(0L, totalCount - redeemedCount - revokedCount));
-        result.put("status", batch.getRevokedAt() != null
-                ? "REVOKED"
-                : batch.getExpiresAt() != null && batch.getExpiresAt().isAfter(now)
-                    ? "ACTIVE"
-                    : "EXPIRED");
+        result.put("status", batchStatus(batch, now));
         result.put("expiresAt", batch.getExpiresAt());
         result.put("note", batch.getNote() == null ? "" : batch.getNote());
         result.put("exportFormat", batch.getExportFormat());
@@ -420,6 +455,80 @@ public class InviteCodeService {
         result.put("revokedAt", batch.getRevokedAt());
         result.put("revokeReason", batch.getRevokeReason() == null ? "" : batch.getRevokeReason());
         return result;
+    }
+
+    private Map<String, Object> toCodeMap(
+            InviteCode code,
+            InviteCodeBatch batch,
+            Instant now
+    ) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", code.getId());
+        result.put("codeFingerprint", fingerprint(code.getCodeHash()));
+        result.put("status", codeStatus(code, batch, now));
+        result.put("redeemedBy", maskedUsername(code.getRedeemedBy()));
+        result.put("redeemedAt", code.getRedeemedAt());
+        result.put("revokedAt", code.getRevokedAt());
+        result.put("revokeReason", code.getRevokeReason() == null ? "" : code.getRevokeReason());
+        result.put("createdAt", code.getCreatedAt());
+        return result;
+    }
+
+    private String batchStatus(InviteCodeBatch batch, Instant now) {
+        if (batch.getRevokedAt() != null) return "REVOKED";
+        return batch.getExpiresAt() != null && batch.getExpiresAt().isAfter(now)
+                ? "ACTIVE"
+                : "EXPIRED";
+    }
+
+    private String codeStatus(InviteCode code, InviteCodeBatch batch, Instant now) {
+        if (code.getRedeemedAt() != null) return "REDEEMED";
+        if (code.getRevokedAt() != null || batch.getRevokedAt() != null) return "REVOKED";
+        return batch.getExpiresAt() != null && batch.getExpiresAt().isAfter(now)
+                ? "AVAILABLE"
+                : "EXPIRED";
+    }
+
+    private String maskedUsername(AppUser user) {
+        if (user == null || user.getUsername() == null || user.getUsername().isBlank()) return "";
+        String value = user.getUsername().trim();
+        if (value.length() <= 2) return value.substring(0, 1) + "*";
+        if (value.length() <= 5) return value.substring(0, 1) + "***";
+        return value.substring(0, 2) + "***" + value.substring(value.length() - 2);
+    }
+
+    private String normalizeBatchQuery(String query) {
+        if (query == null || query.isBlank()) return "";
+        String value = query.replaceAll("[\\p{Cntrl}&&[^\\t]]", " ")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase(Locale.ROOT);
+        return value.length() <= 80 ? value : value.substring(0, 80);
+    }
+
+    private String normalizeBatchRoleFilter(String role) {
+        if (role == null || role.isBlank() || "ALL".equalsIgnoreCase(role)) return "";
+        return normalizeTargetRole(role);
+    }
+
+    private String normalizeBatchStatusFilter(String status) {
+        if (status == null || status.isBlank() || "ALL".equalsIgnoreCase(status)) return "";
+        String value = status.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("ACTIVE", "EXPIRED", "REVOKED").contains(value)) {
+            throw new IllegalArgumentException("批次状态筛选值无效");
+        }
+        return value;
+    }
+
+    private boolean matchesBatchQuery(InviteCodeBatch batch, String query) {
+        if (query.isBlank()) return true;
+        String batchNo = batch.getBatchNo() == null
+                ? ""
+                : batch.getBatchNo().toLowerCase(Locale.ROOT);
+        String note = batch.getNote() == null
+                ? ""
+                : batch.getNote().toLowerCase(Locale.ROOT);
+        return batchNo.contains(query) || note.contains(query);
     }
 
     private AppUser lockAdmin(AppUser admin) {

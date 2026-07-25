@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
+import java.util.List;
 
 public interface InviteCodeRepository extends JpaRepository<InviteCode, Long> {
     boolean existsByCodeHash(String codeHash);
@@ -16,6 +17,8 @@ public interface InviteCodeRepository extends JpaRepository<InviteCode, Long> {
     long countByBatch_IdAndRedeemedAtIsNotNull(Long batchId);
 
     long countByBatch_IdAndRevokedAtIsNotNull(Long batchId);
+
+    List<InviteCode> findTop200ByBatch_IdOrderByIdAsc(Long batchId);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""

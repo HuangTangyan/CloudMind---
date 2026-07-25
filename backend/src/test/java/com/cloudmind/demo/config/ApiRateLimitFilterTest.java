@@ -105,10 +105,11 @@ class ApiRateLimitFilterTest {
                     "/api/invites/redeem"
             );
             first.setRemoteAddr("203.0.113.20");
+            MockHttpServletResponse failed = new MockHttpServletResponse();
             filter.doFilter(
                     first,
-                    new MockHttpServletResponse(),
-                    (ignoredRequest, ignoredResponse) -> {}
+                    failed,
+                    (ignoredRequest, ignoredResponse) -> failed.setStatus(400)
             );
 
             MockHttpServletRequest second = new MockHttpServletRequest(
@@ -125,6 +126,40 @@ class ApiRateLimitFilterTest {
 
             assertEquals(429, blocked.getStatus());
             assertTrue(blocked.getHeader("Retry-After") != null);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    void successfulInviteRedemptionsDoNotConsumeTheFailureBudget() throws Exception {
+        Clock clock = Clock.fixed(Instant.parse("2026-07-24T00:00:00Z"), ZoneOffset.UTC);
+        ApiRateLimitFilter filter = new ApiRateLimitFilter(new ObjectMapper(), clock);
+        ReflectionTestUtils.setField(filter, "inviteRedeemPer15Minutes", 1);
+        AppUser user = new AppUser();
+        user.setId(99L);
+        user.setUsername("successful-user");
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, null)
+        );
+        AtomicInteger allowedRequests = new AtomicInteger();
+
+        try {
+            for (int i = 0; i < 3; i++) {
+                MockHttpServletRequest request = new MockHttpServletRequest(
+                        "POST",
+                        "/api/invites/redeem"
+                );
+                request.setRemoteAddr("203.0.113.30");
+                MockHttpServletResponse response = new MockHttpServletResponse();
+                filter.doFilter(
+                        request,
+                        response,
+                        (ignoredRequest, ignoredResponse) -> allowedRequests.incrementAndGet()
+                );
+                assertEquals(200, response.getStatus());
+            }
+            assertEquals(3, allowedRequests.get());
         } finally {
             SecurityContextHolder.clearContext();
         }

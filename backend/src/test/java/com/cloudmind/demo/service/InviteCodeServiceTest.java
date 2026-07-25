@@ -175,9 +175,75 @@ class InviteCodeServiceTest {
                 () -> service.redeem("token", plainCode)
         );
 
-        assertTrue(error.getMessage().contains("无需使用"));
+        when(codeRepository.findForUpdateByCodeHash(hash(plainCode)))
+                .thenReturn(Optional.empty());
+        IllegalArgumentException unknownCodeError = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.redeem("token", plainCode)
+        );
+        assertEquals(unknownCodeError.getMessage(), error.getMessage());
         assertEquals(null, inviteCode.getRedeemedAt());
         assertFalse(authService.upgradeCalled);
+    }
+
+    @Test
+    void batchListSupportsQueryRoleAndStatusFilters() {
+        InviteCodeBatch activeVip = inviteCode(
+                "VIP",
+                Instant.now().plusSeconds(3600)
+        ).getBatch();
+        activeVip.setBatchNo("CM-CAMPUS-VIP");
+        activeVip.setNote("campus sale");
+        activeVip.setTotalCount(10);
+        InviteCodeBatch revokedSvip = inviteCode(
+                "SVIP",
+                Instant.now().plusSeconds(3600)
+        ).getBatch();
+        revokedSvip.setBatchNo("CM-OTHER-SVIP");
+        revokedSvip.setNote("other");
+        revokedSvip.setTotalCount(10);
+        revokedSvip.setRevokedAt(Instant.now());
+        when(batchRepository.findTop100ByOrderByCreatedAtDesc())
+                .thenReturn(List.of(revokedSvip, activeVip));
+
+        List<Map<String, Object>> result = service.listBatches(
+                admin(),
+                "campus",
+                "VIP",
+                "ACTIVE"
+        );
+
+        assertEquals(1, result.size());
+        assertEquals("CM-CAMPUS-VIP", result.get(0).get("batchNo"));
+        assertEquals("ACTIVE", result.get(0).get("status"));
+    }
+
+    @Test
+    void batchCodeDetailsExposeOnlyMaskedFingerprintsAndAccounts() {
+        InviteCode code = inviteCode("VIP", Instant.now().plusSeconds(3600));
+        code.getBatch().setTotalCount(1);
+        AppUser redeemedBy = user("VIP");
+        redeemedBy.setUsername("student2026");
+        code.setRedeemedBy(redeemedBy);
+        code.setRedeemedAt(Instant.now());
+        when(batchRepository.findById(code.getBatch().getId()))
+                .thenReturn(Optional.of(code.getBatch()));
+        when(codeRepository.findTop200ByBatch_IdOrderByIdAsc(code.getBatch().getId()))
+                .thenReturn(List.of(code));
+
+        Map<String, Object> result = service.batchCodes(
+                admin(),
+                code.getBatch().getId()
+        );
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> codes =
+                (List<Map<String, Object>>) result.get("codes");
+        assertEquals(1, codes.size());
+        assertEquals(12, String.valueOf(codes.get(0).get("codeFingerprint")).length());
+        assertEquals("st***26", codes.get(0).get("redeemedBy"));
+        assertEquals("REDEEMED", codes.get(0).get("status"));
+        assertFalse(codes.get(0).containsKey("codeHash"));
     }
 
     @Test
