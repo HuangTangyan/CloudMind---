@@ -21,7 +21,7 @@ jobs:
       matrix:
         language: [java-kotlin, javascript-typescript]
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
       - uses: github/codeql-action/init@v4.36.0
         with:
           languages: ${{ matrix.language }}
